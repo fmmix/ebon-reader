@@ -1,0 +1,163 @@
+name: Release Build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install and run pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+          pip-audit -r backend/requirements.txt
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run npm audit
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit
+        working-directory: frontend/src-tauri
+        run: cargo audit
+
+      - name: Run gitleaks
+        run: |
+          GITLEAKS_VERSION=8.18.4
+          curl -sSL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+          gitleaks detect --source . --no-git --redact
+
+  build-windows:
+    runs-on: windows-latest
+    needs: security
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Create backend virtual environment and install dependencies
+        shell: pwsh
+        run: |
+          python -m venv backend/.venv
+          backend/.venv/Scripts/python -m pip install --upgrade pip
+          backend/.venv/Scripts/pip install -r backend/requirements.txt pyinstaller pytest
+          "${{ github.workspace }}/backend/.venv/Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run backend tests
+        run: pytest backend/tests -q
+
+      - name: Resolve and apply app version
+        shell: pwsh
+        run: |
+          $version = 'dev'
+      
+          if ("${{ github.event_name }}" -eq 'release') {
+            $tag = "${{ github.ref_name }}"
+            $version = $tag.TrimStart('v')
+      
+            if ($version -notmatch '^\d+\.\d+\.\d+([\-+].*)?$') {
+              throw "Release tag must be semver-like (e.g. v0.1.2)"
+            }
+      
+            # Update tauri.conf.json
+            $tauriPath = "frontend/src-tauri/tauri.conf.json"
+            $tauri = Get-Content $tauriPath -Raw | ConvertFrom-Json
+            $tauri.version = $version
+            $tauri | ConvertTo-Json -Depth 20 | Set-Content $tauriPath -Encoding UTF8
+      
+            # Update Cargo.toml package version
+            $cargoPath = "frontend/src-tauri/Cargo.toml"
+            (Get-Content $cargoPath) -replace '^version\s*=\s*".*"$', "version = `"$version`"" |
+              Set-Content $cargoPath -Encoding UTF8
+          }
+      
+          "VITE_APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+
+      - name: Build Tauri app
+        working-directory: frontend
+        run: npm run tauri:build
+
+      - name: Collect NSIS executables and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          $files = Get-ChildItem -Path "frontend/src-tauri/target/release/bundle/nsis/*.exe"
+          if (-not $files) {
+            throw "No NSIS .exe files found."
+          }
+          foreach ($file in $files) {
+            Copy-Item -Path $file.FullName -Destination dist
+          }
+          $hashLines = foreach ($file in Get-ChildItem -Path "dist/*.exe") {
+            $hash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($file.Name)"
+          }
+          $hashLines | Set-Content -Path "dist/SHA256SUMS.txt"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            dist/*.exe
+            dist/SHA256SUMS.txt
+
+      - name: Upload assets to GitHub release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          gh release upload "${{ github.ref_name }}" dist/*.exe dist/SHA256SUMS.txt --clobber
