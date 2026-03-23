@@ -171,7 +171,7 @@ jobs:
           - runner: macos-latest
             arch: aarch64
             label: macos-arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             arch: x86_64
             label: macos-x86_64
     runs-on: ${{ matrix.runner }}
