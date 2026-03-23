@@ -12,7 +12,16 @@ from app.models.product_category import ProductCategory
 from app.models.receipt import Receipt
 from app.models.receipt_item import ReceiptItem
 from app.models.taxonomy_backup import TaxonomyBackup
+from app.schemas.settings_schemas import (
+    SyntheticDeleteResponse,
+    SyntheticGenerateRequest,
+    SyntheticGenerateResponse,
+)
 from app.services.seeder import seed_defaults
+from app.services.synthetic_data import (
+    delete_synthetic_receipts,
+    generate_synthetic_receipts,
+)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -68,3 +77,31 @@ def hard_reset_data(session: Session = Depends(get_session)) -> dict:
         "message": "Hard reset complete. App data cleared and defaults reseeded.",
         "deleted": deleted_counts,
     }
+
+
+@router.post("/synthetic/generate", response_model=SyntheticGenerateResponse)
+def generate_synthetic_data(
+    body: SyntheticGenerateRequest,
+    session: Session = Depends(get_session),
+) -> SyntheticGenerateResponse:
+    try:
+        result = generate_synthetic_receipts(
+            session=session,
+            store=body.store,
+            count_per_store=body.count_per_store,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return SyntheticGenerateResponse(
+        stores=result.stores,
+        total_inserted=result.total_inserted,
+        total_skipped=result.total_skipped,
+    )
+
+
+@router.delete("/synthetic", response_model=SyntheticDeleteResponse)
+def delete_synthetic_data(
+    session: Session = Depends(get_session),
+) -> SyntheticDeleteResponse:
+    return SyntheticDeleteResponse(deleted=delete_synthetic_receipts(session))

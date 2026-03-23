@@ -11,6 +11,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Plus, Pencil, Trash2, Check, X, Package } from '@lucide/svelte';
+	import { t } from '$lib/i18n/index.svelte';
+	import { isUncategorizedName } from '$lib/utils/category';
+	import { formatCurrency } from '$lib/utils/format';
 
 	let categories = $state<ProductCategory[]>([]);
 	let loading = $state(true);
@@ -37,7 +40,7 @@
 		try {
 			categories = await fetchCategories();
 		} catch (e: any) {
-			error = e?.message || 'Failed to load categories';
+			error = e?.message || t('categories.err_load');
 		} finally {
 			loading = false;
 		}
@@ -54,7 +57,7 @@
 			showAdd = false;
 			await loadCategories();
 		} catch (e: any) {
-			error = e?.message || 'Failed to create category';
+			error = e?.message || t('categories.err_create');
 		}
 	}
 
@@ -81,7 +84,7 @@
 			editId = null;
 			await loadCategories();
 		} catch (e: any) {
-			error = e?.message || 'Failed to update category';
+			error = e?.message || t('categories.err_update');
 		}
 	}
 
@@ -91,7 +94,7 @@
 			await deleteCategory(cat.id);
 			await loadCategories();
 		} catch (e: any) {
-			error = e?.message || 'Cannot delete this category';
+			error = e?.message || t('categories.err_delete');
 		}
 	}
 </script>
@@ -99,12 +102,12 @@
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
 		<div>
-			<h1 class="text-3xl font-bold text-foreground">Categories</h1>
-			<p class="mt-1 text-muted-foreground">Manage product categories and their keywords</p>
+			<h1 class="text-3xl font-bold text-foreground">{t('categories.title')}</h1>
+			<p class="mt-1 text-muted-foreground">{t('categories.subtitle')}</p>
 		</div>
 		<Button onclick={() => (showAdd = !showAdd)}>
 			<Plus class="mr-2 h-4 w-4" />
-			Add Category
+			{t('categories.add')}
 		</Button>
 	</div>
 
@@ -116,31 +119,39 @@
 		</div>
 	{/if}
 
-	<div class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
-		Taxonomy import/export is available in the
-		<a class="font-medium text-foreground underline" href="/rules">Rules page</a>.
+	<div
+		class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-sm text-muted-foreground"
+	>
+		{t('categories.taxonomy_hint')}
+		<a class="font-medium text-foreground underline" href="/rules"
+			>{t('categories.taxonomy_link')}</a
+		>.
 	</div>
 
 	<!-- Add form -->
 	{#if showAdd}
 		<Card.Root>
 			<Card.Header>
-				<Card.Title>New Category</Card.Title>
+				<Card.Title>{t('categories.new')}</Card.Title>
 			</Card.Header>
 			<Card.Content>
 				<div class="flex items-end gap-3">
 					<div class="flex-1">
-						<label class="mb-1 block text-sm text-muted-foreground" for="new-name">Name</label>
+						<label class="mb-1 block text-sm text-muted-foreground" for="new-name"
+							>{t('categories.label_name')}</label
+						>
 						<input
 							id="new-name"
 							type="text"
 							class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
 							bind:value={newName}
-							placeholder="e.g. Snacks"
+							placeholder={t('categories.placeholder_name')}
 						/>
 					</div>
 					<div class="w-20">
-						<label class="mb-1 block text-sm text-muted-foreground" for="new-icon">Icon</label>
+						<label class="mb-1 block text-sm text-muted-foreground" for="new-icon"
+							>{t('categories.label_icon')}</label
+						>
 						<input
 							id="new-icon"
 							type="text"
@@ -149,7 +160,9 @@
 						/>
 					</div>
 					<div class="w-20">
-						<label class="mb-1 block text-sm text-muted-foreground" for="new-color">Color</label>
+						<label class="mb-1 block text-sm text-muted-foreground" for="new-color"
+							>{t('categories.label_color')}</label
+						>
 						<input
 							id="new-color"
 							type="color"
@@ -159,7 +172,7 @@
 					</div>
 					<Button onclick={handleCreate} disabled={!newName.trim()}>
 						<Check class="mr-1 h-4 w-4" />
-						Create
+						{t('categories.create')}
 					</Button>
 					<Button variant="ghost" onclick={() => (showAdd = false)}>
 						<X class="h-4 w-4" />
@@ -171,7 +184,7 @@
 
 	<!-- Category list -->
 	{#if loading}
-		<p class="text-muted-foreground">Loading...</p>
+		<p class="text-muted-foreground">{t('categories.loading')}</p>
 	{:else}
 		<div class="space-y-2">
 			{#each categories as cat (cat.id)}
@@ -210,19 +223,16 @@
 								<span class="text-2xl">{cat.icon}</span>
 								<div>
 									<p class="font-medium text-foreground">{cat.name}</p>
-									<div
-										class="mt-1 h-1.5 w-12 rounded-full"
-										style="background: {cat.color}"
-									></div>
+									<div class="mt-1 h-1.5 w-12 rounded-full" style="background: {cat.color}"></div>
 								</div>
 							</div>
 							<div class="flex items-center gap-3">
 								<div class="flex items-center gap-4 text-sm text-muted-foreground">
 									<span class="flex items-center gap-1">
 										<Package class="h-3.5 w-3.5" />
-										{cat.item_count ?? 0} items
+										{t('categories.items_count', { count: String(cat.item_count ?? 0) })}
 									</span>
-									<span>{(cat.total_spend ?? 0).toFixed(2)} €</span>
+									<span>{formatCurrency(cat.total_spend ?? 0)}</span>
 								</div>
 								<Badge variant={cat.is_default ? 'secondary' : 'outline'}>
 									{cat.is_default ? 'default' : 'custom'}
@@ -231,16 +241,15 @@
 									<Button size="sm" variant="ghost" onclick={() => startEdit(cat)}>
 										<Pencil class="h-3.5 w-3.5" />
 									</Button>
-									{#if cat.name.trim().toLowerCase() !== 'uncategorized'}
-										<Button
-											size="sm"
-											variant="ghost"
-											class="text-destructive hover:text-destructive"
-											onclick={() => handleDelete(cat)}
-										>
-											<Trash2 class="h-3.5 w-3.5" />
-										</Button>
-									{/if}
+									<Button
+										size="sm"
+										variant="ghost"
+										class="text-destructive hover:text-destructive"
+										disabled={isUncategorizedName(cat.name)}
+										onclick={() => handleDelete(cat)}
+									>
+										<Trash2 class="h-3.5 w-3.5" />
+									</Button>
 								</div>
 							</div>
 						{/if}

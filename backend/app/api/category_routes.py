@@ -9,6 +9,8 @@ from app.schemas.category_schemas import CategoryCreate, CategoryUpdate
 
 router = APIRouter(prefix="/api/categories", tags=["categories"])
 
+UNCATEGORIZED_NAMES = {"uncategorized", "unkategorisiert"}
+
 
 @router.get("/")
 def list_categories(session: Session = Depends(get_session)) -> list[dict]:
@@ -18,7 +20,7 @@ def list_categories(session: Session = Depends(get_session)) -> list[dict]:
     result = []
     for cat in categories:
         # For "Uncategorized", also count items with NULL category_id
-        if cat.name == "Uncategorized":
+        if cat.name.strip().lower() in UNCATEGORIZED_NAMES:
             from sqlalchemy import or_
 
             condition = or_(
@@ -125,7 +127,7 @@ def delete_category(
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
 
-    if category.name.strip().lower() == "uncategorized":
+    if category.name.strip().lower() in UNCATEGORIZED_NAMES:
         raise HTTPException(
             status_code=403,
             detail="Cannot delete system category 'Uncategorized'",

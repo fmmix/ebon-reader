@@ -1,7 +1,9 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { Chart, DoughnutController, ArcElement, Tooltip, Legend } from 'chart.js';
 	import type { CategorySpend } from '$lib/api';
+	import { t } from '$lib/i18n/index.svelte';
+	import { formatCurrency } from '$lib/utils/format';
+	import { resolveCssVarColor, resolveFontFamily } from '$lib/utils/chart-colors';
 
 	Chart.register(DoughnutController, ArcElement, Tooltip, Legend);
 
@@ -9,63 +11,16 @@
 
 	let canvas = $state<HTMLCanvasElement>();
 	let chart: Chart<'doughnut'> | null = null;
-	let colorCtx: CanvasRenderingContext2D | null = null;
-	let fontProbe: HTMLElement | null = null;
 
-	function toCanvasColor(color: string, fallback: string): string {
-		if (typeof document === 'undefined') return fallback;
-
-		if (!colorCtx) {
-			const colorCanvas = document.createElement('canvas');
-			colorCtx = colorCanvas.getContext('2d');
+	function destroyChart() {
+		if (chart) {
+			chart.destroy();
+			chart = null;
 		}
-
-		if (!colorCtx) return fallback;
-
-		colorCtx.fillStyle = fallback;
-		const baseline = colorCtx.fillStyle;
-		colorCtx.fillStyle = color;
-
-		const normalized = colorCtx.fillStyle;
-		return normalized && normalized !== baseline ? normalized : baseline;
-	}
-
-	function resolveCssVarColor(varName: string, fallback: string, useHslVar = false): string {
-		if (typeof document === 'undefined') return fallback;
-
-		const el = document.createElement('span');
-		el.style.position = 'absolute';
-		el.style.visibility = 'hidden';
-		el.style.pointerEvents = 'none';
-		el.style.color = useHslVar ? `hsl(var(${varName}))` : `var(${varName})`;
-
-		document.body.appendChild(el);
-
-		try {
-			const resolved = getComputedStyle(el).color.trim();
-			return toCanvasColor(resolved || fallback, fallback);
-		} finally {
-			el.remove();
-		}
-	}
-
-	function resolveFontFamily(fallback: string): string {
-		if (typeof document === 'undefined') return fallback;
-
-		if (!fontProbe) {
-			fontProbe = document.createElement('span');
-			fontProbe.style.position = 'absolute';
-			fontProbe.style.visibility = 'hidden';
-			fontProbe.style.pointerEvents = 'none';
-			document.body.appendChild(fontProbe);
-		}
-
-		const family = getComputedStyle(fontProbe).fontFamily.trim();
-		return family || fallback;
 	}
 
 	function buildChart() {
-		if (chart) chart.destroy();
+		destroyChart();
 		if (!canvas || data.length === 0) return;
 
 		const total = data.reduce((s, d) => s + d.total_spent, 0);
@@ -93,11 +48,11 @@
 				ctx.textBaseline = 'middle';
 				ctx.fillStyle = mutedForeground;
 				ctx.font = `500 12px ${fontFamily}`;
-				ctx.fillText('Selected total', centerX, centerY - 12);
+				ctx.fillText(t('dashboard.selected_total'), centerX, centerY - 12);
 
 				ctx.fillStyle = foreground;
 				ctx.font = `600 18px ${fontFamily}`;
-				ctx.fillText(`${selectedTotal.toFixed(2)} €`, centerX, centerY + 10);
+				ctx.fillText(formatCurrency(selectedTotal), centerX, centerY + 10);
 				ctx.restore();
 			}
 		};
@@ -135,7 +90,7 @@
 							label: (ctx) => {
 								const val = ctx.parsed;
 								const pct = total > 0 ? ((val / total) * 100).toFixed(1) : '0';
-								return ` €${val.toFixed(2)} (${pct}%)`;
+								return ` ${formatCurrency(val)} (${pct}%)`;
 							}
 						}
 					}
@@ -144,20 +99,22 @@
 		});
 	}
 
-	onMount(() => {
-		buildChart();
-	});
-
 	$effect(() => {
-		// Re-render when data changes
-		if (data && canvas) buildChart();
+		void data;
+		if (canvas) {
+			buildChart();
+		}
+
+		return () => {
+			destroyChart();
+		};
 	});
 </script>
 
 <div class="relative mx-auto aspect-square w-full max-w-64">
 	{#if data.length === 0}
 		<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-			No category data yet
+			{t('dashboard.no_category_data')}
 		</div>
 	{:else}
 		<canvas class="h-full w-full" bind:this={canvas}></canvas>

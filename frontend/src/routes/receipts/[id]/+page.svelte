@@ -15,41 +15,48 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Separator from '$lib/components/ui/separator';
 	import { ArrowLeft, Gift, Ticket, Sparkles, FileText, Store, Trash2 } from '@lucide/svelte';
+	import { formatDateTime } from '$lib/utils/date';
 	import { formatVatClass } from '$lib/utils/vat';
+	import { t } from '$lib/i18n/index.svelte';
+	import { formatCurrency } from '$lib/utils/format';
+	import { bonusTypeLabel, isDeductionBonusType, computeProgramSavings } from '$lib/utils/bonus';
+	import { findUncategorizedId } from '$lib/utils/category';
 
 	let receipt = $state<ReceiptDetail | null>(null);
 	let categories = $state<ProductCategory[]>([]);
 	let loading = $state(true);
 	let error = $state('');
+
+	let programSavings = $derived(
+		receipt
+			? computeProgramSavings(receipt.bonus_entries, receipt.total_bonus)
+			: 0
+	);
 	let rewardBonusEntries = $derived(
-		receipt ? receipt.bonus_entries.filter((bonus) => bonus.type !== 'redeemed') : []
+		receipt
+			? receipt.bonus_entries.filter((bonus) => !isDeductionBonusType(bonus.type))
+			: []
 	);
-	let redeemedBonusEntries = $derived(
-		receipt ? receipt.bonus_entries.filter((bonus) => bonus.type === 'redeemed') : []
+	let deductionBonusEntries = $derived(
+		receipt
+			? receipt.bonus_entries.filter((bonus) => isDeductionBonusType(bonus.type))
+			: []
 	);
+	let uncategorizedId = $derived(findUncategorizedId(categories));
 
 	onMount(async () => {
 		const id = Number(page.params.id);
 		try {
-			[receipt, categories] = await Promise.all([
-				fetchReceiptDetail(id),
-				fetchCategories()
-			]);
+			[receipt, categories] = await Promise.all([fetchReceiptDetail(id), fetchCategories()]);
 		} catch (e: any) {
-			error = e?.message || 'Failed to load receipt';
+			error = e?.message || t('receipts.err_load');
 		} finally {
 			loading = false;
 		}
 	});
 
 	function formatDate(iso: string): string {
-		return new Date(iso).toLocaleDateString('de-DE', {
-			day: '2-digit',
-			month: '2-digit',
-			year: 'numeric',
-			hour: '2-digit',
-			minute: '2-digit'
-		});
+		return formatDateTime(iso);
 	}
 
 	async function handleCategoryChange(itemId: number, categoryId: number | null) {
@@ -65,17 +72,18 @@
 				receipt = { ...receipt };
 			}
 		} catch (e: any) {
-			error = e?.message || 'Failed to update category';
+			error = e?.message || t('receipts.err_update_category');
 		}
 	}
 
 	async function handleDelete() {
 		if (!receipt) return;
+		if (!window.confirm(t('receipts.delete_confirm'))) return;
 		try {
 			await deleteReceipt(receipt.id);
 			goto('/receipts');
 		} catch (e: any) {
-			error = e?.message || 'Failed to delete receipt';
+			error = e?.message || t('receipts.err_delete');
 		}
 	}
 </script>
@@ -87,22 +95,24 @@
 				<ArrowLeft class="h-4 w-4" />
 			</Button>
 			<div>
-				<h1 class="text-3xl font-bold text-foreground">Receipt Detail</h1>
-				<p class="mt-1 text-muted-foreground">Items, categories, bonus, and metadata</p>
+				<h1 class="text-3xl font-bold text-foreground">{t('receipts.detail_title')}</h1>
+				<p class="mt-1 text-muted-foreground">{t('receipts.detail_subtitle')}</p>
 			</div>
 		</div>
 		{#if receipt}
 			<Button variant="destructive" onclick={handleDelete}>
 				<Trash2 class="mr-2 h-4 w-4" />
-				Delete Receipt
+				{t('receipts.delete')}
 			</Button>
 		{/if}
 	</div>
 
 	{#if loading}
-		<p class="text-muted-foreground">Loading...</p>
+		<p class="text-muted-foreground">{t('receipts.loading')}</p>
 	{:else if error}
-		<div class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+		<div
+			class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+		>
 			{error}
 		</div>
 	{:else if receipt}
@@ -119,7 +129,7 @@
 					</div>
 					<div class="text-right">
 						<p class="text-2xl font-bold text-foreground">
-							{receipt.total_amount.toFixed(2)} €
+							{formatCurrency(receipt.total_amount)}
 						</p>
 						<p class="text-sm text-muted-foreground">
 							{formatDate(receipt.purchased_at)}
@@ -132,20 +142,20 @@
 		<!-- Items table -->
 		<Card.Root>
 			<Card.Header>
-				<Card.Title>Items ({receipt.items.length})</Card.Title>
-				<Card.Description>Change categories using the dropdown — saves automatically</Card.Description>
+				<Card.Title>{t('receipts.items_title', { count: receipt.items.length })}</Card.Title>
+				<Card.Description>{t('receipts.items_desc')}</Card.Description>
 			</Card.Header>
 			<Card.Content>
 				<div class="overflow-x-auto">
 					<table class="w-full text-sm">
 						<thead>
 							<tr class="border-b border-border text-left text-muted-foreground">
-								<th class="pb-3 font-medium">Product</th>
-								<th class="pb-3 text-center font-medium">Qty</th>
-								<th class="pb-3 text-right font-medium">Unit</th>
-								<th class="pb-3 text-right font-medium">Total</th>
-								<th class="pb-3 font-medium">VAT</th>
-								<th class="pb-3 font-medium">Category</th>
+								<th class="pb-3 font-medium">{t('import.th_product')}</th>
+								<th class="pb-3 text-center font-medium">{t('import.th_qty')}</th>
+								<th class="pb-3 text-right font-medium">{t('import.th_unit')}</th>
+								<th class="pb-3 text-right font-medium">{t('import.th_total')}</th>
+								<th class="pb-3 font-medium">{t('import.th_vat')}</th>
+								<th class="pb-3 font-medium">{t('import.th_category')}</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -161,24 +171,25 @@
 									</td>
 									<td class="py-3 text-center text-muted-foreground">{item.quantity}</td>
 									<td class="py-3 text-right text-muted-foreground">
-										{item.unit_price.toFixed(2)} €
+										{formatCurrency(item.unit_price)}
 									</td>
 									<td class="py-3 text-right font-medium text-foreground">
-										{item.total_price.toFixed(2)} €
+										{formatCurrency(item.total_price)}
 									</td>
 									<td class="py-3">
-										<Badge variant="secondary" class="text-xs">{formatVatClass(item.vat_class)}</Badge>
+										<Badge variant="secondary" class="text-xs"
+											>{formatVatClass(item.vat_class)}</Badge
+										>
 									</td>
 									<td class="py-3">
 										<select
 											class="rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground"
-											value={item.category_id ?? ''}
+											value={item.category_id ?? uncategorizedId}
 											onchange={(e) => {
 												const val = (e.target as HTMLSelectElement).value;
 												handleCategoryChange(item.id, val ? Number(val) : null);
 											}}
 										>
-											<option value="">Uncategorized</option>
 											{#each categories as cat (cat.id)}
 												<option value={cat.id}>{cat.icon} {cat.name}</option>
 											{/each}
@@ -198,9 +209,13 @@
 				<Card.Header>
 					<div class="flex items-center gap-2">
 						<Sparkles class="h-4 w-4 text-yellow-400" />
-						<Card.Title>Bonus & Rewards</Card.Title>
+						<Card.Title>{t('receipts.bonus_title')}</Card.Title>
 					</div>
-					<Card.Description>{receipt.total_bonus.toFixed(2)} € total savings</Card.Description>
+					<Card.Description
+						>{t('receipts.total_savings', {
+							amount: formatCurrency(programSavings)
+						})}</Card.Description
+					>
 				</Card.Header>
 				<Card.Content>
 					<div class="space-y-3">
@@ -214,28 +229,30 @@
 									{/if}
 									<div>
 										<p class="text-sm font-medium text-foreground">{bonus.description}</p>
-										<Badge variant="secondary" class="text-xs">{bonus.type}</Badge>
+										<Badge variant="secondary" class="text-xs">{bonusTypeLabel(bonus.type, t)}</Badge>
 									</div>
 								</div>
-								<p class="font-medium text-emerald-400">{bonus.amount.toFixed(2)} €</p>
+								<p class="font-medium text-emerald-400">{formatCurrency(bonus.amount)}</p>
 							</div>
 						{/each}
 
-						{#if redeemedBonusEntries.length > 0}
+						{#if deductionBonusEntries.length > 0}
 							{#if rewardBonusEntries.length > 0}
 								<Separator.Root />
 							{/if}
 							<div class="space-y-2">
-								<p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-									Used Bonus Credit
+								<p class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+									{t('receipts.applied_deductions')}
 								</p>
-								{#each redeemedBonusEntries as bonus (bonus.id)}
+								{#each deductionBonusEntries as bonus (bonus.id)}
 									<div class="flex items-center justify-between">
 										<div>
 											<p class="text-sm font-medium text-muted-foreground">{bonus.description}</p>
-											<Badge variant="outline" class="text-xs">redeemed</Badge>
+											<Badge variant="outline" class="text-xs">{bonusTypeLabel(bonus.type, t)}</Badge>
 										</div>
-										<p class="font-medium text-destructive">-{bonus.amount.toFixed(2)} €</p>
+										<p class="font-medium text-destructive">
+											-{formatCurrency(Math.abs(bonus.amount))}
+										</p>
 									</div>
 								{/each}
 							</div>
@@ -244,9 +261,9 @@
 						{#if receipt.bonus_balance !== null}
 							<Separator.Root />
 							<div class="flex items-center justify-between text-sm">
-								<span class="text-muted-foreground">Bonus Balance</span>
+								<span class="text-muted-foreground">{t('receipts.bonus_balance')}</span>
 								<span class="font-medium text-foreground">
-									{receipt.bonus_balance.toFixed(2)} €
+									{formatCurrency(receipt.bonus_balance)}
 								</span>
 							</div>
 						{/if}
@@ -260,7 +277,7 @@
 			<Card.Header>
 				<div class="flex items-center gap-2">
 					<FileText class="h-4 w-4 text-muted-foreground" />
-					<Card.Title>eBon Metadata</Card.Title>
+					<Card.Title>{t('receipts.metadata_title')}</Card.Title>
 				</div>
 			</Card.Header>
 			<Card.Content>
@@ -290,11 +307,11 @@
 						</div>
 					{/if}
 					<div>
-						<p class="text-muted-foreground">Source File</p>
+						<p class="text-muted-foreground">{t('receipts.source_file')}</p>
 						<p class="text-foreground">{receipt.source_filename}</p>
 					</div>
 					<div>
-						<p class="text-muted-foreground">Imported</p>
+						<p class="text-muted-foreground">{t('receipts.imported')}</p>
 						<p class="text-foreground">{formatDate(receipt.imported_at)}</p>
 					</div>
 				</div>

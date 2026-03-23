@@ -7,7 +7,11 @@ class OverviewStats(BaseModel):
     item_count: int
     avg_basket: float
     total_bonus: float
+    instant_discount: float
+    basket_discount: float
+    program_savings: float
     redeemed_bonus: float
+    total_deductions: float
 
 
 class CategorySpend(BaseModel):
@@ -22,6 +26,9 @@ class CategorySpend(BaseModel):
 class MonthlySpend(BaseModel):
     month: str  # YYYY-MM
     total_spent: float
+    redeemed_bonus: float
+    instant_discount: float
+    basket_discount: float
     receipt_count: int
 
 
@@ -54,6 +61,42 @@ class MonthlyBonusStat(BaseModel):
     month: str  # YYYY-MM
     total_spent: float
     earned_bonus: float
+    instant_discount: float
+    basket_discount: float
+    program_savings: float
+    redeemed_bonus: float
+    bonus_rate: float
+    receipt_count: int
+
+
+class MonthlyBonusByShopStat(BaseModel):
+    month: str  # YYYY-MM
+    store_name: str
+    total_spent: float
+    earned_bonus: float
+    instant_discount: float
+    basket_discount: float
+    program_savings: float
+    redeemed_bonus: float
+    bonus_rate: float
+    receipt_count: int
+
+
+class StoreSpend(BaseModel):
+    store_name: str
+    total_spent: float
+    receipt_count: int
+    avg_basket: float
+    share_percent: float
+
+
+class StoreBonusStat(BaseModel):
+    store_name: str
+    total_spent: float
+    earned_bonus: float
+    instant_discount: float
+    basket_discount: float
+    program_savings: float
     redeemed_bonus: float
     bonus_rate: float
     receipt_count: int

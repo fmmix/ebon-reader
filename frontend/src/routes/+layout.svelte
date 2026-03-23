@@ -12,18 +12,19 @@
 		Settings
 	} from '@lucide/svelte';
 	import * as Separator from '$lib/components/ui/separator';
+	import { t } from '$lib/i18n/index.svelte';
 
 	let { children } = $props();
 	const appVersion = import.meta.env.VITE_APP_VERSION || 'dev';
 
 	const navItems = [
-		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
-		{ href: '/import', label: 'Import', icon: Upload },
-		{ href: '/receipts', label: 'Receipts', icon: Receipt },
-		{ href: '/analytics', label: 'Analytics', icon: BarChart3 },
-		{ href: '/categories', label: 'Categories', icon: Tags },
-		{ href: '/rules', label: 'Rules', icon: ListFilter },
-		{ href: '/settings', label: 'Settings', icon: Settings }
+		{ href: '/', labelKey: 'nav.dashboard', icon: LayoutDashboard },
+		{ href: '/import', labelKey: 'nav.import', icon: Upload },
+		{ href: '/receipts', labelKey: 'nav.receipts', icon: Receipt },
+		{ href: '/analytics', labelKey: 'nav.analytics', icon: BarChart3 },
+		{ href: '/categories', labelKey: 'nav.categories', icon: Tags },
+		{ href: '/rules', labelKey: 'nav.rules', icon: ListFilter },
+		{ href: '/settings', labelKey: 'nav.settings', icon: Settings }
 	];
 </script>
 
@@ -38,9 +39,9 @@
 	<title>eBon Reader</title>
 </svelte:head>
 
-<div class="flex h-screen font-['Inter',sans-serif]">
+<div class="flex h-screen overflow-hidden font-['Inter',sans-serif]">
 	<!-- Sidebar -->
-	<nav class="flex w-56 flex-col border-r border-border bg-card px-3 py-5">
+	<nav class="flex w-56 flex-col overflow-y-auto border-r border-border bg-card px-3 py-5">
 		<div class="mb-6 flex items-center gap-2.5 px-3">
 			<ShoppingCart class="h-6 w-6 text-primary" />
 			<span class="text-lg font-bold text-foreground">eBon Reader</span>
@@ -56,7 +57,7 @@
 						class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
 					>
 						<item.icon class="h-4 w-4" />
-						{item.label}
+						{t(item.labelKey)}
 					</a>
 				</li>
 			{/each}
@@ -67,7 +68,7 @@
 	</nav>
 
 	<!-- Main content -->
-	<main class="flex-1 overflow-y-auto bg-background p-6">
+	<main class="min-h-0 flex-1 overflow-y-auto bg-background p-6">
 		{@render children()}
 	</main>
 </div>

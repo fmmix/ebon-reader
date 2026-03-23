@@ -27,6 +27,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Plus, Pencil, Trash2, Check, X, ListFilter, Search } from '@lucide/svelte';
+	import { t } from '$lib/i18n/index.svelte';
+	import { clampPriority } from '$lib/utils/rules';
 
 	let rules = $state<CategorizeRule[]>([]);
 	let categories = $state<ProductCategory[]>([]);
@@ -76,13 +78,6 @@
 	let deletingAllRules = $state(false);
 	let deleteAllSuccessMessage = $state('');
 
-	function clampPriority(value: number): number {
-		if (!Number.isFinite(value)) {
-			return 20;
-		}
-		return Math.min(100, Math.max(0, Math.round(value)));
-	}
-
 	onMount(async () => {
 		categories = await fetchCategories();
 		await Promise.all([loadRules(), loadTaxonomyBackups()]);
@@ -99,7 +94,7 @@
 				selectedTaxonomyBackupId = '';
 			}
 		} catch (e: any) {
-			error = e?.message || 'Failed to load taxonomy backups';
+			error = e?.message || t('rules.err_load_backups');
 		} finally {
 			loadingTaxonomyBackups = false;
 		}
@@ -111,7 +106,7 @@
 			const catId = filterCategoryId !== '' ? Number(filterCategoryId) : undefined;
 			rules = await fetchRules(catId);
 		} catch (e: any) {
-			error = e?.message || 'Failed to load rules';
+			error = e?.message || t('rules.err_load');
 		} finally {
 			loading = false;
 		}
@@ -134,7 +129,7 @@
 			showAdd = false;
 			await loadRules();
 		} catch (e: any) {
-			error = e?.message || 'Failed to create rule';
+			error = e?.message || t('rules.err_create');
 		}
 	}
 
@@ -163,7 +158,7 @@
 			editId = null;
 			await loadRules();
 		} catch (e: any) {
-			error = e?.message || 'Failed to update rule';
+			error = e?.message || t('rules.err_update');
 		}
 	}
 
@@ -173,7 +168,7 @@
 			await deleteRule(rule.id);
 			await loadRules();
 		} catch (e: any) {
-			error = e?.message || 'Failed to delete rule';
+			error = e?.message || t('rules.err_delete');
 		}
 	}
 
@@ -182,18 +177,18 @@
 
 		error = '';
 		deleteAllSuccessMessage = '';
-		if (!window.confirm('Delete all categorization rules? This cannot be undone.')) {
+		if (!window.confirm(t('rules.danger_confirm'))) {
 			return;
 		}
 
 		deletingAllRules = true;
 		try {
 			const result = await deleteAllRules();
-			deleteAllSuccessMessage = `Deleted ${result.deleted} rule${result.deleted === 1 ? '' : 's'}.`;
+			deleteAllSuccessMessage = t('rules.danger_deleted', { count: String(result.deleted) });
 			deleteAllConfirmation = '';
 			await loadRules();
 		} catch (e: any) {
-			error = e?.message || 'Failed to delete all rules';
+			error = e?.message || t('rules.err_delete_all');
 		} finally {
 			deletingAllRules = false;
 		}
@@ -202,18 +197,12 @@
 	async function handleReCategorize() {
 		error = '';
 		if (reCategorizePreview === null || previewOverrideManual !== overrideManualAssignments) {
-			reCategorizeGuardMessage =
-				'Please run Preview Changes first for the current override setting.';
+			reCategorizeGuardMessage = t('rules.recat_guard_preview');
 			return;
 		}
 		reCategorizeGuardMessage = '';
 
-		if (
-			overrideManualAssignments &&
-			!window.confirm(
-				'Override manual assignments for all items? This will clear manual flags where auto-categorization is re-applied.'
-			)
-		) {
+		if (overrideManualAssignments && !window.confirm(t('rules.recat_confirm'))) {
 			return;
 		}
 
@@ -221,7 +210,7 @@
 		try {
 			reCategorizeResult = await reCategorizeItems(overrideManualAssignments);
 		} catch (e: any) {
-			error = e?.message || 'Failed to re-categorize items';
+			error = e?.message || t('rules.err_recat');
 		} finally {
 			reCategorizing = false;
 		}
@@ -235,7 +224,7 @@
 			reCategorizePreview = await previewReCategorizeItems(overrideManualAssignments);
 			previewOverrideManual = overrideManualAssignments;
 		} catch (e: any) {
-			error = e?.message || 'Failed to preview re-categorization';
+			error = e?.message || t('rules.err_preview_recat');
 		} finally {
 			previewingReCategorize = false;
 		}
@@ -245,8 +234,7 @@
 		if (reCategorizePreview !== null && previewOverrideManual !== overrideManualAssignments) {
 			reCategorizePreview = null;
 			previewOverrideManual = null;
-			reCategorizeGuardMessage =
-				'Preview invalidated because override setting changed. Run Preview Changes again.';
+			reCategorizeGuardMessage = t('rules.recat_guard_invalidated');
 			return;
 		}
 		reCategorizeGuardMessage = '';
@@ -315,13 +303,13 @@
 			taxonomyPreview = null;
 			taxonomyApplyResult = null;
 			taxonomyPreviewSignature = '';
-			taxonomyGuardMessage = 'Preview invalidated. Run Preview Replace for this file.';
+			taxonomyGuardMessage = t('rules.taxonomy_guard_preview');
 		} catch (e: any) {
 			importedTaxonomyBundle = null;
 			taxonomyPreview = null;
 			taxonomyApplyResult = null;
 			taxonomyPreviewSignature = '';
-			error = e?.message || 'Failed to parse taxonomy JSON';
+			error = e?.message || t('rules.err_parse_json');
 		}
 	}
 
@@ -379,7 +367,7 @@
 			document.body.removeChild(link);
 			URL.revokeObjectURL(url);
 		} catch (e: any) {
-			error = e?.message || 'Failed to export taxonomy';
+			error = e?.message || t('rules.err_export');
 		} finally {
 			exportingTaxonomy = false;
 		}
@@ -393,7 +381,7 @@
 		error = '';
 		taxonomyGuardMessage = '';
 		if (selectedTaxonomyBackupId === '') {
-			taxonomyGuardMessage = 'Select a backup first.';
+			taxonomyGuardMessage = t('rules.taxonomy_guard_select');
 			return;
 		}
 
@@ -406,10 +394,9 @@
 			taxonomyPreview = null;
 			taxonomyApplyResult = null;
 			taxonomyPreviewSignature = '';
-			taxonomyGuardMessage =
-				'Preview invalidated. Run Preview Replace for the selected backup before applying.';
+			taxonomyGuardMessage = t('rules.taxonomy_guard_preview_backup');
 		} catch (e: any) {
-			error = e?.message || 'Failed to load taxonomy backup';
+			error = e?.message || t('rules.err_load_backup');
 		} finally {
 			loadingTaxonomyBackupBundle = false;
 		}
@@ -419,7 +406,7 @@
 		error = '';
 		taxonomyGuardMessage = '';
 		if (!importedTaxonomyBundle || !importedTaxonomySignature) {
-			taxonomyGuardMessage = 'Load a taxonomy bundle first.';
+			taxonomyGuardMessage = t('rules.taxonomy_guard_load');
 			return;
 		}
 		previewingTaxonomyReplace = true;
@@ -428,7 +415,7 @@
 			taxonomyPreviewSignature = importedTaxonomySignature;
 			taxonomyApplyResult = null;
 		} catch (e: any) {
-			error = e?.message || 'Failed to preview taxonomy replacement';
+			error = e?.message || t('rules.err_preview_taxonomy');
 		} finally {
 			previewingTaxonomyReplace = false;
 		}
@@ -437,21 +424,16 @@
 	async function handleApplyTaxonomyReplace() {
 		error = '';
 		if (!importedTaxonomyBundle || !importedTaxonomySignature) {
-			taxonomyGuardMessage = 'Load a taxonomy bundle first.';
+			taxonomyGuardMessage = t('rules.taxonomy_guard_load');
 			return;
 		}
 		if (!taxonomyPreview || taxonomyPreviewSignature !== importedTaxonomySignature) {
-			taxonomyGuardMessage =
-				'Please run Preview Replace for the currently loaded file before applying.';
+			taxonomyGuardMessage = t('rules.taxonomy_guard_preview_apply');
 			return;
 		}
 		taxonomyGuardMessage = '';
 
-		if (
-			!window.confirm(
-				'Apply full taxonomy replacement? This overwrites all categories, rules, and remaps stored receipt items. A taxonomy backup will be stored in the database first.'
-			)
-		) {
+		if (!window.confirm(t('rules.taxonomy_confirm'))) {
 			return;
 		}
 
@@ -465,10 +447,14 @@
 			]);
 			categories = nextCategories;
 		} catch (e: any) {
-			error = e?.message || 'Failed to apply taxonomy replacement';
+			error = e?.message || t('rules.err_apply_taxonomy');
 		} finally {
 			applyingTaxonomyReplace = false;
 		}
+	}
+
+	function matchTypeLabel(mt: string): string {
+		return mt === 'exact' ? t('rules.match_exact') : t('rules.match_contains');
 	}
 
 	let filteredRules = $derived(
@@ -481,12 +467,12 @@
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
 		<div>
-			<h1 class="text-3xl font-bold text-foreground">Rules</h1>
-			<p class="mt-1 text-muted-foreground">Categorization rules and keyword mappings</p>
+			<h1 class="text-3xl font-bold text-foreground">{t('rules.title')}</h1>
+			<p class="mt-1 text-muted-foreground">{t('rules.subtitle')}</p>
 		</div>
 		<Button onclick={() => (showAdd = !showAdd)}>
 			<Plus class="mr-2 h-4 w-4" />
-			Add Rule
+			{t('rules.add')}
 		</Button>
 	</div>
 
@@ -500,16 +486,16 @@
 
 	<Card.Root>
 		<Card.Header>
-			<Card.Title>Taxonomy Import / Export</Card.Title>
+			<Card.Title>{t('rules.taxonomy_title')}</Card.Title>
 			<Card.Description>
-				Export all categories and rules, or import a JSON bundle and replace taxonomy with preview.
+				{t('rules.taxonomy_desc')}
 			</Card.Description>
 		</Card.Header>
 		<Card.Content>
 			<div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
 				<div class="flex-1 space-y-2">
 					<label class="block text-sm text-muted-foreground" for="taxonomy-json-hidden">
-						Import taxonomy bundle (.json)
+						{t('rules.taxonomy_import_label')}
 					</label>
 					<input
 						id="taxonomy-json-hidden"
@@ -521,49 +507,52 @@
 					/>
 					<div class="flex flex-col gap-2 sm:flex-row sm:items-center">
 						<Button type="button" variant="outline" onclick={triggerTaxonomyFilePicker}>
-							Choose JSON File
+							{t('rules.taxonomy_choose_file')}
 						</Button>
 						<div
 							class="min-h-9 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-muted-foreground"
 						>
 							<span class="block truncate">
-								{importedTaxonomyFileName || 'No file selected'}
+								{importedTaxonomyFileName || t('rules.taxonomy_no_file')}
 							</span>
 						</div>
 					</div>
 				</div>
 				<div class="flex flex-wrap items-center gap-2">
 					<Button variant="outline" onclick={handleExportTaxonomy} disabled={exportingTaxonomy}>
-						{exportingTaxonomy ? 'Exporting...' : 'Export JSON'}
+						{exportingTaxonomy ? t('rules.taxonomy_exporting') : t('rules.taxonomy_export')}
 					</Button>
 					<Button
 						variant="outline"
 						onclick={handlePreviewTaxonomyReplace}
 						disabled={previewingTaxonomyReplace || !importedTaxonomyBundle}
 					>
-						{previewingTaxonomyReplace ? 'Previewing...' : 'Preview Replace'}
+						{previewingTaxonomyReplace
+							? t('rules.taxonomy_previewing')
+							: t('rules.taxonomy_preview')}
 					</Button>
 					<Button
 						onclick={handleApplyTaxonomyReplace}
 						disabled={applyingTaxonomyReplace || !importedTaxonomyBundle}
 					>
-						{applyingTaxonomyReplace ? 'Applying...' : 'Apply Full Replace'}
+						{applyingTaxonomyReplace ? t('rules.taxonomy_applying') : t('rules.taxonomy_apply')}
 					</Button>
 				</div>
 			</div>
 
 			<div class="mt-4 rounded-md border border-border/60 bg-muted/20 p-3">
-				<div class="mb-2 text-sm text-foreground">Restore from database backup</div>
+				<div class="mb-2 text-sm text-foreground">{t('rules.taxonomy_restore')}</div>
 				<div class="flex flex-col gap-2 sm:flex-row sm:items-center">
 					<select
 						class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground sm:flex-1"
 						bind:value={selectedTaxonomyBackupId}
 						disabled={loadingTaxonomyBackups || taxonomyBackups.length === 0}
 					>
-						<option value="">Select backup...</option>
+						<option value="">{t('rules.taxonomy_select_backup')}</option>
 						{#each taxonomyBackups as backup (backup.id)}
 							<option value={backup.id}>
-								{new Date(backup.created_at).toLocaleString()} | {backup.categories_count} categories | {backup.rules_count} rules | #{backup.id}
+								{new Date(backup.created_at).toLocaleString()} | {backup.categories_count} categories
+								| {backup.rules_count} rules | #{backup.id}
 							</option>
 						{/each}
 					</select>
@@ -573,11 +562,13 @@
 						onclick={handleLoadSelectedBackup}
 						disabled={loadingTaxonomyBackupBundle || selectedTaxonomyBackupId === ''}
 					>
-						{loadingTaxonomyBackupBundle ? 'Loading...' : 'Load Selected Backup'}
+						{loadingTaxonomyBackupBundle
+							? t('rules.taxonomy_loading_backup')
+							: t('rules.taxonomy_load_backup')}
 					</Button>
 				</div>
 				{#if !loadingTaxonomyBackups && taxonomyBackups.length === 0}
-					<p class="mt-2 text-xs text-muted-foreground">No backups stored yet.</p>
+					<p class="mt-2 text-xs text-muted-foreground">{t('rules.taxonomy_no_backups')}</p>
 				{/if}
 			</div>
 
@@ -587,56 +578,64 @@
 
 			{#if taxonomyPreview}
 				<div class="mt-4">
-					<p class="mb-2 text-xs text-muted-foreground">Preview (dry-run, no database changes)</p>
+					<p class="mb-2 text-xs text-muted-foreground">{t('rules.taxonomy_preview_note')}</p>
 					<div class="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Incoming categories</div>
+							<div class="text-xs text-muted-foreground">{t('rules.taxonomy_incoming_cat')}</div>
 							<div class="font-semibold text-foreground">{taxonomyPreview.incoming_categories}</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Incoming rules</div>
+							<div class="text-xs text-muted-foreground">{t('rules.taxonomy_incoming_rules')}</div>
 							<div class="font-semibold text-foreground">{taxonomyPreview.incoming_rules}</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Normalized categories</div>
-							<div class="font-semibold text-foreground">{taxonomyPreview.normalized_categories}</div>
+							<div class="text-xs text-muted-foreground">{t('rules.taxonomy_norm_cat')}</div>
+							<div class="font-semibold text-foreground">
+								{taxonomyPreview.normalized_categories}
+							</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Normalized rules</div>
+							<div class="text-xs text-muted-foreground">{t('rules.taxonomy_norm_rules')}</div>
 							<div class="font-semibold text-foreground">{taxonomyPreview.normalized_rules}</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Existing categories</div>
+							<div class="text-xs text-muted-foreground">{t('rules.taxonomy_existing_cat')}</div>
 							<div class="font-semibold text-foreground">{taxonomyPreview.existing_categories}</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Existing rules</div>
+							<div class="text-xs text-muted-foreground">{t('rules.taxonomy_existing_rules')}</div>
 							<div class="font-semibold text-foreground">{taxonomyPreview.existing_rules}</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Receipt items</div>
+							<div class="text-xs text-muted-foreground">{t('rules.taxonomy_receipt_items')}</div>
 							<div class="font-semibold text-foreground">{taxonomyPreview.receipt_items_total}</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Skipped rules</div>
+							<div class="text-xs text-muted-foreground">{t('rules.taxonomy_skipped_rules')}</div>
 							<div class="font-semibold text-foreground">
 								{taxonomyPreview.skipped_rules_missing_category}
 							</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Remap matched items</div>
+							<div class="text-xs text-muted-foreground">{t('rules.taxonomy_remap_matched')}</div>
 							<div class="font-semibold text-foreground">{taxonomyPreview.remap_matched_items}</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Fallback Uncategorized</div>
+							<div class="text-xs text-muted-foreground">{t('rules.taxonomy_fallback_uncat')}</div>
 							<div class="font-semibold text-foreground">
 								{taxonomyPreview.fallback_uncategorized_items}
 							</div>
 						</div>
-						<div class="col-span-2 rounded-md border border-border/60 bg-muted/20 p-2 md:col-span-2">
-							<div class="text-xs text-muted-foreground">Will ensure Uncategorized</div>
+						<div
+							class="col-span-2 rounded-md border border-border/60 bg-muted/20 p-2 md:col-span-2"
+						>
+							<div class="text-xs text-muted-foreground">
+								{t('rules.taxonomy_will_ensure_uncat')}
+							</div>
 							<div class="font-semibold text-foreground">
-								{taxonomyPreview.will_ensure_uncategorized ? 'Yes' : 'No'}
+								{taxonomyPreview.will_ensure_uncategorized
+									? t('rules.taxonomy_yes')
+									: t('rules.taxonomy_no')}
 							</div>
 						</div>
 					</div>
@@ -645,7 +644,8 @@
 
 			{#if taxonomyApplyResult}
 				<p class="mt-3 text-sm text-foreground">
-					Replacement applied. Backup ID: <span class="font-mono">{taxonomyApplyResult.backup_id}</span>
+					{t('rules.taxonomy_applied')}
+					<span class="font-mono">{taxonomyApplyResult.backup_id}</span>
 				</p>
 			{/if}
 		</Card.Content>
@@ -655,46 +655,54 @@
 	{#if showAdd}
 		<Card.Root>
 			<Card.Header>
-				<Card.Title>New Rule</Card.Title>
+				<Card.Title>{t('rules.new')}</Card.Title>
 			</Card.Header>
 			<Card.Content>
 				<div class="flex items-end gap-3">
 					<div class="flex-1">
-						<label class="mb-1 block text-sm text-muted-foreground" for="new-kw">Keyword</label>
+						<label class="mb-1 block text-sm text-muted-foreground" for="new-kw"
+							>{t('rules.label_keyword')}</label
+						>
 						<input
 							id="new-kw"
 							type="text"
 							class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
 							bind:value={newKeyword}
-							placeholder="e.g. MILCH"
+							placeholder={t('rules.placeholder_keyword')}
 						/>
 					</div>
 					<div class="w-32">
-						<label class="mb-1 block text-sm text-muted-foreground" for="new-match">Match</label>
+						<label class="mb-1 block text-sm text-muted-foreground" for="new-match"
+							>{t('rules.label_match')}</label
+						>
 						<select
 							id="new-match"
 							class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
 							bind:value={newMatchType}
 						>
-							<option value="contains">Contains</option>
-							<option value="exact">Exact</option>
+							<option value="contains">{t('rules.match_contains')}</option>
+							<option value="exact">{t('rules.match_exact')}</option>
 						</select>
 					</div>
 					<div class="w-48">
-						<label class="mb-1 block text-sm text-muted-foreground" for="new-cat">Category</label>
+						<label class="mb-1 block text-sm text-muted-foreground" for="new-cat"
+							>{t('rules.label_category')}</label
+						>
 						<select
 							id="new-cat"
 							class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
 							bind:value={newCategoryId}
 						>
-							<option value="">Select...</option>
+							<option value="">{t('rules.select')}</option>
 							{#each categories as cat (cat.id)}
 								<option value={cat.id}>{cat.icon} {cat.name}</option>
 							{/each}
 						</select>
 					</div>
 					<div class="w-28">
-						<label class="mb-1 block text-sm text-muted-foreground" for="new-priority">Priority</label>
+						<label class="mb-1 block text-sm text-muted-foreground" for="new-priority"
+							>{t('rules.label_priority')}</label
+						>
 						<input
 							id="new-priority"
 							type="number"
@@ -707,7 +715,7 @@
 					</div>
 					<Button onclick={handleCreate} disabled={!newKeyword.trim() || newCategoryId === ''}>
 						<Check class="mr-1 h-4 w-4" />
-						Create
+						{t('rules.create')}
 					</Button>
 					<Button variant="ghost" onclick={() => (showAdd = false)}>
 						<X class="h-4 w-4" />
@@ -720,11 +728,11 @@
 	<!-- Filters -->
 	<div class="flex items-center gap-3">
 		<div class="relative flex-1">
-			<Search class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+			<Search class="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
 			<input
 				type="text"
-				placeholder="Search keywords..."
-				class="w-full rounded-md border border-input bg-background py-2 pl-10 pr-3 text-sm text-foreground"
+				placeholder={t('rules.search_placeholder')}
+				class="w-full rounded-md border border-input bg-background py-2 pr-3 pl-10 text-sm text-foreground"
 				bind:value={searchQuery}
 			/>
 		</div>
@@ -735,7 +743,7 @@
 				bind:value={filterCategoryId}
 				onchange={() => loadRules()}
 			>
-				<option value="">All categories</option>
+				<option value="">{t('rules.all_categories')}</option>
 				{#each categories as cat (cat.id)}
 					<option value={cat.id}>{cat.icon} {cat.name}</option>
 				{/each}
@@ -745,8 +753,8 @@
 
 	<Card.Root>
 		<Card.Header>
-			<Card.Title>Re-categorize Imported Items</Card.Title>
-			<Card.Description>Apply current rules and learned mappings to stored receipt items</Card.Description>
+			<Card.Title>{t('rules.recat_title')}</Card.Title>
+			<Card.Description>{t('rules.recat_desc')}</Card.Description>
 		</Card.Header>
 		<Card.Content>
 			<div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -758,21 +766,25 @@
 						bind:checked={overrideManualAssignments}
 						onchange={handleOverrideManualChange}
 					/>
-					<span>Override manual assignments</span>
+					<span>{t('rules.recat_override')}</span>
 				</label>
 				<div class="flex items-center gap-2">
-					<Button variant="outline" onclick={handlePreviewReCategorize} disabled={previewingReCategorize}>
-						{previewingReCategorize ? 'Previewing...' : 'Preview Changes'}
+					<Button
+						variant="outline"
+						onclick={handlePreviewReCategorize}
+						disabled={previewingReCategorize}
+					>
+						{previewingReCategorize ? t('rules.recat_previewing') : t('rules.recat_preview')}
 					</Button>
 					<Button onclick={handleReCategorize} disabled={reCategorizing}>
-						{reCategorizing ? 'Running...' : 'Run Re-categorization'}
+						{reCategorizing ? t('rules.recat_running') : t('rules.recat_run')}
 					</Button>
 				</div>
 			</div>
 
 			{#if overrideManualAssignments}
 				<p class="mt-2 text-xs text-amber-700">
-					Warning: manual item assignments will be overwritten and converted back to auto-categorized values.
+					{t('rules.recat_override_warn')}
 				</p>
 			{/if}
 
@@ -782,52 +794,60 @@
 
 			{#if reCategorizePreview}
 				<div class="mt-4">
-					<p class="mb-2 text-xs text-muted-foreground">Preview (dry-run, no database changes)</p>
+					<p class="mb-2 text-xs text-muted-foreground">{t('rules.recat_preview_note')}</p>
 					<div class="grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Total items</div>
+							<div class="text-xs text-muted-foreground">{t('rules.recat_total')}</div>
 							<div class="font-semibold text-foreground">{reCategorizePreview.total_items}</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Processed</div>
+							<div class="text-xs text-muted-foreground">{t('rules.recat_processed')}</div>
 							<div class="font-semibold text-foreground">{reCategorizePreview.processed_items}</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Updated</div>
+							<div class="text-xs text-muted-foreground">{t('rules.recat_updated')}</div>
 							<div class="font-semibold text-foreground">{reCategorizePreview.updated_items}</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Unchanged</div>
+							<div class="text-xs text-muted-foreground">{t('rules.recat_unchanged')}</div>
 							<div class="font-semibold text-foreground">{reCategorizePreview.unchanged_items}</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Skipped manual</div>
-							<div class="font-semibold text-foreground">{reCategorizePreview.skipped_manual_items}</div>
+							<div class="text-xs text-muted-foreground">{t('rules.recat_skipped_manual')}</div>
+							<div class="font-semibold text-foreground">
+								{reCategorizePreview.skipped_manual_items}
+							</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Overridden manual</div>
-							<div class="font-semibold text-foreground">{reCategorizePreview.overridden_manual_items}</div>
+							<div class="text-xs text-muted-foreground">{t('rules.recat_overridden_manual')}</div>
+							<div class="font-semibold text-foreground">
+								{reCategorizePreview.overridden_manual_items}
+							</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Categorized</div>
-							<div class="font-semibold text-foreground">{reCategorizePreview.categorized_items}</div>
+							<div class="text-xs text-muted-foreground">{t('rules.recat_categorized')}</div>
+							<div class="font-semibold text-foreground">
+								{reCategorizePreview.categorized_items}
+							</div>
 						</div>
 						<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-							<div class="text-xs text-muted-foreground">Uncategorized</div>
-							<div class="font-semibold text-foreground">{reCategorizePreview.uncategorized_items}</div>
+							<div class="text-xs text-muted-foreground">{t('rules.recat_uncategorized')}</div>
+							<div class="font-semibold text-foreground">
+								{reCategorizePreview.uncategorized_items}
+							</div>
 						</div>
 					</div>
 
 					{#if reCategorizePreview.changes.length === 0}
-						<p class="mt-3 text-sm text-muted-foreground">No category changes would be applied.</p>
+						<p class="mt-3 text-sm text-muted-foreground">{t('rules.recat_no_changes')}</p>
 					{:else}
 						<div class="mt-3 overflow-x-auto rounded-md border border-border/60">
 							<table class="w-full text-sm">
 								<thead>
 									<tr class="border-b border-border text-left text-muted-foreground">
-										<th class="px-3 py-2 font-medium">From</th>
-										<th class="px-3 py-2 font-medium">To</th>
-										<th class="px-3 py-2 text-right font-medium">Items</th>
+										<th class="px-3 py-2 font-medium">{t('rules.recat_from')}</th>
+										<th class="px-3 py-2 font-medium">{t('rules.recat_to')}</th>
+										<th class="px-3 py-2 text-right font-medium">{t('rules.recat_items')}</th>
 									</tr>
 								</thead>
 								<tbody>
@@ -850,36 +870,42 @@
 			{#if reCategorizeResult}
 				<div class="mt-4 grid grid-cols-2 gap-2 text-sm md:grid-cols-4">
 					<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-						<div class="text-xs text-muted-foreground">Total items</div>
+						<div class="text-xs text-muted-foreground">{t('rules.recat_total')}</div>
 						<div class="font-semibold text-foreground">{reCategorizeResult.total_items}</div>
 					</div>
 					<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-						<div class="text-xs text-muted-foreground">Processed</div>
+						<div class="text-xs text-muted-foreground">{t('rules.recat_processed')}</div>
 						<div class="font-semibold text-foreground">{reCategorizeResult.processed_items}</div>
 					</div>
 					<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-						<div class="text-xs text-muted-foreground">Updated</div>
+						<div class="text-xs text-muted-foreground">{t('rules.recat_updated')}</div>
 						<div class="font-semibold text-foreground">{reCategorizeResult.updated_items}</div>
 					</div>
 					<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-						<div class="text-xs text-muted-foreground">Unchanged</div>
+						<div class="text-xs text-muted-foreground">{t('rules.recat_unchanged')}</div>
 						<div class="font-semibold text-foreground">{reCategorizeResult.unchanged_items}</div>
 					</div>
 					<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-						<div class="text-xs text-muted-foreground">Skipped manual</div>
-						<div class="font-semibold text-foreground">{reCategorizeResult.skipped_manual_items}</div>
+						<div class="text-xs text-muted-foreground">{t('rules.recat_skipped_manual')}</div>
+						<div class="font-semibold text-foreground">
+							{reCategorizeResult.skipped_manual_items}
+						</div>
 					</div>
 					<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-						<div class="text-xs text-muted-foreground">Overridden manual</div>
-						<div class="font-semibold text-foreground">{reCategorizeResult.overridden_manual_items}</div>
+						<div class="text-xs text-muted-foreground">{t('rules.recat_overridden_manual')}</div>
+						<div class="font-semibold text-foreground">
+							{reCategorizeResult.overridden_manual_items}
+						</div>
 					</div>
 					<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-						<div class="text-xs text-muted-foreground">Categorized</div>
+						<div class="text-xs text-muted-foreground">{t('rules.recat_categorized')}</div>
 						<div class="font-semibold text-foreground">{reCategorizeResult.categorized_items}</div>
 					</div>
 					<div class="rounded-md border border-border/60 bg-muted/20 p-2">
-						<div class="text-xs text-muted-foreground">Uncategorized</div>
-						<div class="font-semibold text-foreground">{reCategorizeResult.uncategorized_items}</div>
+						<div class="text-xs text-muted-foreground">{t('rules.recat_uncategorized')}</div>
+						<div class="font-semibold text-foreground">
+							{reCategorizeResult.uncategorized_items}
+						</div>
 					</div>
 				</div>
 			{/if}
@@ -889,24 +915,24 @@
 	<!-- Rules list -->
 	<Card.Root>
 		<Card.Header>
-			<Card.Title>Rules ({filteredRules.length})</Card.Title>
-			<Card.Description>Keywords that auto-assign products to categories during import</Card.Description>
+			<Card.Title>{t('rules.rules_count', { count: String(filteredRules.length) })}</Card.Title>
+			<Card.Description>{t('rules.rules_desc')}</Card.Description>
 		</Card.Header>
 		<Card.Content>
 			{#if loading}
-				<p class="text-muted-foreground">Loading...</p>
+				<p class="text-muted-foreground">{t('rules.loading')}</p>
 			{:else if filteredRules.length === 0}
-				<p class="py-4 text-center text-muted-foreground">No rules found</p>
+				<p class="py-4 text-center text-muted-foreground">{t('rules.no_rules')}</p>
 			{:else}
 				<div class="overflow-x-auto">
 					<table class="w-full text-sm">
 						<thead>
 							<tr class="border-b border-border text-left text-muted-foreground">
-								<th class="pb-3 font-medium">Keyword</th>
-								<th class="pb-3 font-medium">Match Type</th>
-								<th class="pb-3 font-medium">Category</th>
-								<th class="pb-3 font-medium">Priority</th>
-								<th class="pb-3 text-right font-medium">Actions</th>
+								<th class="pb-3 font-medium">{t('rules.label_keyword')}</th>
+								<th class="pb-3 font-medium">{t('rules.label_match_type')}</th>
+								<th class="pb-3 font-medium">{t('rules.label_category')}</th>
+								<th class="pb-3 font-medium">{t('rules.label_priority')}</th>
+								<th class="pb-3 text-right font-medium">{t('rules.label_actions')}</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -925,8 +951,8 @@
 												class="rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground"
 												bind:value={editMatchType}
 											>
-												<option value="contains">Contains</option>
-												<option value="exact">Exact</option>
+												<option value="contains">{t('rules.match_contains')}</option>
+												<option value="exact">{t('rules.match_exact')}</option>
 											</select>
 										</td>
 										<td class="py-3">
@@ -962,7 +988,7 @@
 									{:else}
 										<td class="py-3 font-mono text-foreground">{rule.keyword}</td>
 										<td class="py-3">
-											<Badge variant="secondary">{rule.match_type}</Badge>
+											<Badge variant="secondary">{matchTypeLabel(rule.match_type)}</Badge>
 										</td>
 										<td class="py-3">
 											<span class="flex items-center gap-2">
@@ -998,15 +1024,15 @@
 
 	<Card.Root class="border-destructive/40">
 		<Card.Header>
-			<Card.Title>Danger Zone</Card.Title>
+			<Card.Title>{t('rules.danger_title')}</Card.Title>
 			<Card.Description>
-				Delete all categorization rules only. Categories and imported receipts are not deleted.
+				{t('rules.danger_desc')}
 			</Card.Description>
 		</Card.Header>
 		<Card.Content>
 			<div class="space-y-3">
 				<label class="block text-sm text-muted-foreground" for="delete-all-rules-confirm">
-					Type DELETE to enable this action.
+					{t('rules.danger_type_delete')}
 				</label>
 				<div class="flex flex-col gap-2 sm:flex-row sm:items-center">
 					<input
@@ -1022,7 +1048,7 @@
 						onclick={handleDeleteAllRules}
 						disabled={deletingAllRules || deleteAllConfirmation.trim() !== 'DELETE'}
 					>
-						{deletingAllRules ? 'Deleting...' : 'Delete All Rules'}
+						{deletingAllRules ? t('rules.danger_deleting') : t('rules.danger_delete_all')}
 					</Button>
 				</div>
 				{#if deleteAllSuccessMessage}

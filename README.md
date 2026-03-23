@@ -2,9 +2,28 @@
 
 eBon Reader is a desktop app for importing retail eBon receipts, categorizing line items, and viewing spending analytics.
 
+## Supported shops & import method
+
+| Shop | Status | How to get receipts                                                                                                               | Import format |
+| --- | --- |-----------------------------------------------------------------------------------------------------------------------------------| --- |
+| REWE | Supported | Bulk download from web login                                                                                                      | PDF |
+| Lidl | Supported | Browser script from logged-in web account bulk to `.json` (copy script from settings), or copy/paste single eBon text into `.txt` | JSON / TXT |
+| Kaufland | Supported | Download each eBon manually in the mobile app and send/share it to your computer                                                  | PDF |
+
+Retailers expose receipts differently, so the import flow depends on what their platform allows.
+
+## Bonus program semantics
+
+- REWE usually uses cashback that is earned now and redeemed later.
+- Lidl and Kaufland often use instant discounts applied directly at checkout.
+- Direct cross-shop comparison is therefore imperfect.
+- Category and item analytics use basket values.
+- REWE cashback appears as an aggregated block at the bottom of the receipt, not under individual items, so it cannot be treated like item-adjacent instant discounts.
+- Basket values currently reflect printed item totals, not always net cash outflow after all discounts or redemptions. This behavior may change as receipt support and comparison logic evolve.
+
 ## Features
 
-- Import and parse receipt data from supported eBon/PDF formats (REWE only right now)
+- Import and parse receipt data from supported eBon/PDF/TXT/JSON formats across REWE, Lidl, and Kaufland
 - Categorize purchases with configurable rules
 - View spending statistics and category-based analytics
 - Run as a desktop app via Tauri or in local backend/frontend development mode

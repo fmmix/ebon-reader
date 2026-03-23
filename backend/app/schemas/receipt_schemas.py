@@ -30,6 +30,7 @@ class ReceiptListItem(BaseModel):
     store_address: str
     total_amount: float
     total_bonus: float
+    redeemed_bonus: float
     source_filename: str
     item_count: int
 

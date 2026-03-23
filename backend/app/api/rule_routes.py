@@ -29,7 +29,7 @@ from app.services.categorizer import Categorizer
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
-UNCATEGORIZED_NAME = "Uncategorized"
+UNCATEGORIZED_NAMES = {"uncategorized", "unkategorisiert"}
 UNCATEGORIZED_ICON = "🏷️"
 UNCATEGORIZED_COLOR = "#6b7280"
 
@@ -38,7 +38,7 @@ def _resolve_category_name(
     category_id: int | None, category_names_by_id: dict[int, str]
 ) -> str:
     if category_id is None:
-        return UNCATEGORIZED_NAME
+        return "Uncategorized"
     return category_names_by_id.get(category_id, "Unknown")
 
 
@@ -112,11 +112,16 @@ def _normalize_taxonomy_bundle(
         )
 
     will_ensure_uncategorized = False
-    uncategorized_normalized_name = _normalize_name(UNCATEGORIZED_NAME)
-    if uncategorized_normalized_name not in categories_by_normalized_name:
-        categories_by_normalized_name[uncategorized_normalized_name] = (
+    has_any_uncategorized = any(
+        normalized_name in UNCATEGORIZED_NAMES
+        for normalized_name in categories_by_normalized_name
+    )
+    if not has_any_uncategorized:
+        # Pick a default uncategorized name (first in the set)
+        default_uncat_name = next(iter(UNCATEGORIZED_NAMES))
+        categories_by_normalized_name[default_uncat_name] = (
             TaxonomyCategoryPayload(
-                name=UNCATEGORIZED_NAME,
+                name=default_uncat_name.capitalize(),
                 icon=UNCATEGORIZED_ICON,
                 color=UNCATEGORIZED_COLOR,
                 is_default=True,
@@ -432,9 +437,15 @@ def apply_taxonomy_replace(
         if category.id is not None:
             category_ids_by_normalized_name[normalized_name] = category.id
 
-    uncategorized_id = category_ids_by_normalized_name[
-        _normalize_name(UNCATEGORIZED_NAME)
-    ]
+    # Find the uncategorized category ID from the incoming bundle
+    uncategorized_id = None
+    for norm_name, cat_id in category_ids_by_normalized_name.items():
+        if norm_name in UNCATEGORIZED_NAMES:
+            uncategorized_id = cat_id
+            break
+    if uncategorized_id is None:
+        # Fallback: use the first category
+        uncategorized_id = next(iter(category_ids_by_normalized_name.values()))
     for item in items:
         old_category_name = (
             old_item_category_name_by_id.get(item.id) if item.id is not None else None

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session, select, func
+from sqlmodel import Session, select, func, col
 
 from app.core.database import get_session
 from app.models.bonus_entry import BonusEntry
@@ -19,15 +19,48 @@ router = APIRouter(prefix="/api/receipts", tags=["receipts"])
 @router.get("/", response_model=list[ReceiptListItem])
 def list_receipts(session: Session = Depends(get_session)) -> list[ReceiptListItem]:
     """List all receipts with item count, sorted by date descending."""
-    receipts = session.exec(
-        select(Receipt).order_by(Receipt.purchased_at.desc())  # type: ignore
+    item_count_subquery = (
+        select(
+            col(ReceiptItem.receipt_id).label("receipt_id"),
+            func.count(col(ReceiptItem.id)).label("item_count"),
+        )
+        .group_by(col(ReceiptItem.receipt_id))
+        .subquery()
+    )
+
+    redeemed_bonus_subquery = (
+        select(
+            col(BonusEntry.receipt_id).label("receipt_id"),
+            func.coalesce(func.sum(col(BonusEntry.amount)), 0).label("redeemed_bonus"),
+        )
+        .where(col(BonusEntry.type) == "redeemed")
+        .group_by(col(BonusEntry.receipt_id))
+        .subquery()
+    )
+
+    rows = session.exec(
+        select(
+            Receipt,
+            func.coalesce(item_count_subquery.c.item_count, 0).label("item_count"),
+            func.coalesce(redeemed_bonus_subquery.c.redeemed_bonus, 0).label(
+                "redeemed_bonus"
+            ),
+        )
+        .outerjoin(
+            item_count_subquery, col(Receipt.id) == item_count_subquery.c.receipt_id
+        )
+        .outerjoin(
+            redeemed_bonus_subquery,
+            col(Receipt.id) == redeemed_bonus_subquery.c.receipt_id,
+        )
+        .order_by(col(Receipt.purchased_at).desc())
     ).all()
 
     result = []
-    for r in receipts:
-        item_count = session.exec(
-            select(func.count(ReceiptItem.id)).where(ReceiptItem.receipt_id == r.id)
-        ).one()
+    for row in rows:
+        r = row[0]
+        item_count = int(row[1])
+        redeemed_bonus = float(row[2])
         result.append(
             ReceiptListItem(
                 id=r.id,  # type: ignore
@@ -36,6 +69,7 @@ def list_receipts(session: Session = Depends(get_session)) -> list[ReceiptListIt
                 store_address=r.store_address,
                 total_amount=r.total_amount,
                 total_bonus=r.total_bonus,
+                redeemed_bonus=redeemed_bonus,
                 source_filename=r.source_filename,
                 item_count=item_count,
             )
@@ -160,6 +194,12 @@ def update_item_category(
 
     if "category_id" in body:
         new_category_id = body["category_id"]
+        if (
+            new_category_id is not None
+            and session.get(ProductCategory, new_category_id) is None
+        ):
+            raise HTTPException(status_code=400, detail="Invalid category_id")
+
         if item.category_id != new_category_id:
             item.category_id = new_category_id
             item.is_manual_assignment = True

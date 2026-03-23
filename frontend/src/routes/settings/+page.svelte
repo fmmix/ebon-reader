@@ -2,8 +2,23 @@
 	import { onDestroy } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import { extractDebugImportText, hardResetData } from '$lib/api';
-	import { AlertTriangle, Copy, RotateCcw } from '@lucide/svelte';
+	import {
+		extractDebugImportText,
+		fetchLidlScraperScript,
+		generateSyntheticData,
+		hardResetData,
+		deleteSyntheticData
+	} from '$lib/api';
+	import {
+		AlertTriangle,
+		Copy,
+		RotateCcw,
+		Globe,
+		ShoppingCart,
+		FlaskConical,
+		Trash2
+	} from '@lucide/svelte';
+	import { t, getLocale, setLocale, AVAILABLE_LOCALES } from '$lib/i18n/index.svelte';
 
 	const confirmationPhrase = 'RESET';
 
@@ -12,15 +27,26 @@
 	let successMessage = $state('');
 	let errorMessage = $state('');
 	let debugFile = $state<File | null>(null);
+	let debugFileInput = $state<HTMLInputElement | null>(null);
 	let debugText = $state('');
 	let isExtracting = $state(false);
 	let debugSuccessMessage = $state('');
 	let debugErrorMessage = $state('');
 	const debugSuccessFadeMs = 3000;
 	let debugSuccessTimeout: ReturnType<typeof setTimeout> | null = null;
+	let lidlCopied = $state(false);
+	let lidlCopiedTimeout: ReturnType<typeof setTimeout> | null = null;
+	let syntheticStore = $state('all');
+	let syntheticCountPerStore = $state(5);
+	let isGeneratingSynthetic = $state(false);
+	let isDeletingSynthetic = $state(false);
+	let syntheticSuccessMessage = $state('');
+	let syntheticErrorMessage = $state('');
 
 	let canReset = $derived(confirmationInput === confirmationPhrase && !isResetting);
 	let canExtractDebugText = $derived(Boolean(debugFile) && !isExtracting);
+	let canGenerateSynthetic = $derived(!isGeneratingSynthetic && !isDeletingSynthetic);
+	let canDeleteSynthetic = $derived(!isDeletingSynthetic && !isGeneratingSynthetic);
 
 	function scheduleDebugSuccessFade(): void {
 		if (debugSuccessTimeout) {
@@ -34,9 +60,8 @@
 	}
 
 	onDestroy(() => {
-		if (debugSuccessTimeout) {
-			clearTimeout(debugSuccessTimeout);
-		}
+		if (debugSuccessTimeout) clearTimeout(debugSuccessTimeout);
+		if (lidlCopiedTimeout) clearTimeout(lidlCopiedTimeout);
 	});
 
 	async function handleHardReset() {
@@ -44,11 +69,7 @@
 			return;
 		}
 
-		if (
-			!window.confirm(
-				'Hard reset will permanently clear imported receipts, learned mappings, categories, rules, and backups before reseeding defaults. Continue?'
-			)
-		) {
+		if (!window.confirm(t('settings.hard_reset_confirm'))) {
 			return;
 		}
 
@@ -63,10 +84,11 @@
 						.map(([table, count]) => `${table}: ${count}`)
 						.join(', ')
 				: '';
-			successMessage = deletedSummary ? `${result.message} (${deletedSummary})` : result.message;
+			const msg = t('settings.hard_reset_success');
+			successMessage = deletedSummary ? `${msg} (${deletedSummary})` : msg;
 			confirmationInput = '';
 		} catch (e: any) {
-			errorMessage = e?.message || 'Hard reset failed';
+			errorMessage = e?.message || t('settings.hard_reset_failed');
 		} finally {
 			isResetting = false;
 		}
@@ -102,13 +124,19 @@
 			debugText = result.text;
 			const copied = await copyDebugTextToClipboard(result.text);
 			debugSuccessMessage = copied
-				? `Extracted ${result.pages} pages (${result.characters} characters) and copied to clipboard.`
-				: `Extracted ${result.pages} pages (${result.characters} characters). Clipboard access failed; copy manually from the text box.`;
+				? t('settings.debug_extracted', {
+						pages: String(result.pages),
+						chars: String(result.characters)
+					})
+				: t('settings.debug_extracted_no_clip', {
+						pages: String(result.pages),
+						chars: String(result.characters)
+					});
 			if (copied) {
 				scheduleDebugSuccessFade();
 			}
 		} catch (e: any) {
-			debugErrorMessage = e?.message || 'Failed to extract PDF text';
+			debugErrorMessage = e?.message || t('settings.debug_extract_failed');
 		} finally {
 			isExtracting = false;
 		}
@@ -122,48 +150,267 @@
 		debugErrorMessage = '';
 		const copied = await copyDebugTextToClipboard(debugText);
 		if (copied) {
-			debugSuccessMessage = 'Copied text to clipboard.';
+			debugSuccessMessage = t('settings.debug_copied');
 			scheduleDebugSuccessFade();
 			return;
 		}
 
 		debugSuccessMessage = '';
-		debugErrorMessage = 'Clipboard access failed. Select and copy the textarea content manually.';
+		debugErrorMessage = t('settings.debug_clip_failed');
+	}
+
+	function formatSyntheticStoreLabel(storeSlug: string): string {
+		if (storeSlug === 'rewe') return 'REWE';
+		if (storeSlug === 'lidl') return 'Lidl';
+		if (storeSlug === 'kaufland') return 'Kaufland';
+		return storeSlug;
+	}
+
+	function clampSyntheticCount(value: number): number {
+		if (!Number.isFinite(value)) return 5;
+		if (value < 1) return 1;
+		if (value > 50) return 50;
+		return Math.floor(value);
+	}
+
+	async function handleGenerateSynthetic() {
+		syntheticErrorMessage = '';
+		syntheticSuccessMessage = '';
+		syntheticCountPerStore = clampSyntheticCount(syntheticCountPerStore);
+		isGeneratingSynthetic = true;
+
+		try {
+			const result = await generateSyntheticData({
+				store: syntheticStore as 'all' | 'rewe' | 'lidl' | 'kaufland',
+				count_per_store: syntheticCountPerStore
+			});
+			const storeSummary = Object.entries(result.stores)
+				.map(
+					([storeSlug, counts]) =>
+						`${formatSyntheticStoreLabel(storeSlug)}: +${counts.inserted}, ${t('settings.synthetic_skipped_short')} ${counts.skipped}`
+				)
+				.join(' | ');
+			syntheticSuccessMessage = `${t('settings.synthetic_generate_success_total', {
+				inserted: String(result.total_inserted),
+				skipped: String(result.total_skipped)
+			})} ${storeSummary}`;
+		} catch (e: any) {
+			syntheticErrorMessage = e?.message || t('settings.synthetic_generate_failed');
+		} finally {
+			isGeneratingSynthetic = false;
+		}
+	}
+
+	async function handleDeleteSynthetic() {
+		if (!window.confirm(t('settings.synthetic_delete_confirm'))) {
+			return;
+		}
+
+		syntheticErrorMessage = '';
+		syntheticSuccessMessage = '';
+		isDeletingSynthetic = true;
+
+		try {
+			const result = await deleteSyntheticData();
+			const deletedSummary = Object.entries(result.deleted)
+				.map(([table, count]) => `${table}: ${count}`)
+				.join(', ');
+			syntheticSuccessMessage = deletedSummary
+				? `${t('settings.synthetic_delete_success')} (${deletedSummary})`
+				: t('settings.synthetic_delete_success');
+		} catch (e: any) {
+			syntheticErrorMessage = e?.message || t('settings.synthetic_delete_failed');
+		} finally {
+			isDeletingSynthetic = false;
+		}
 	}
 </script>
 
 <div class="space-y-6">
 	<div>
-		<h1 class="text-3xl font-bold text-foreground">Settings</h1>
+		<h1 class="text-3xl font-bold text-foreground">{t('settings.title')}</h1>
+		<p class="mt-1 text-muted-foreground">{t('settings.subtitle')}</p>
 	</div>
+
+	<Card.Root>
+		<Card.Header>
+			<Card.Title class="flex items-center gap-2">
+				<Globe class="h-5 w-5" />
+				{t('settings.language')}
+			</Card.Title>
+			<Card.Description>
+				{t('settings.language_desc')}
+			</Card.Description>
+		</Card.Header>
+		<Card.Content>
+			<div class="flex gap-2">
+				{#each AVAILABLE_LOCALES as loc (loc.value)}
+					<Button
+						variant={getLocale() === loc.value ? 'default' : 'outline'}
+						onclick={() => setLocale(loc.value)}
+						class="min-w-24"
+					>
+						{loc.label}
+					</Button>
+				{/each}
+			</div>
+		</Card.Content>
+	</Card.Root>
+
+	<Card.Root>
+		<Card.Header>
+			<Card.Title class="flex items-center gap-2">
+				<ShoppingCart class="h-5 w-5" />
+				{t('settings.lidl_title')}
+			</Card.Title>
+			<Card.Description>
+				{t('settings.lidl_desc')}
+			</Card.Description>
+		</Card.Header>
+		<Card.Content class="space-y-4">
+			<div class="space-y-1 text-sm text-muted-foreground">
+				<p>{t('settings.lidl_step1')}</p>
+				<p>{t('settings.lidl_step2')}</p>
+				<p>{t('settings.lidl_step3')}</p>
+				<p>{t('settings.lidl_step4')}</p>
+			</div>
+			<div class="flex items-center gap-3">
+				<Button
+					onclick={async () => {
+						try {
+							const script = await fetchLidlScraperScript();
+							await navigator.clipboard.writeText(script);
+							lidlCopied = true;
+							if (lidlCopiedTimeout) clearTimeout(lidlCopiedTimeout);
+							lidlCopiedTimeout = setTimeout(() => {
+								lidlCopied = false;
+							}, 3000);
+						} catch {
+							/* ignore */
+						}
+					}}
+				>
+					<Copy class="mr-2 h-4 w-4" />
+					{t('settings.lidl_copy')}
+				</Button>
+				{#if lidlCopied}
+					<span class="text-sm text-emerald-600">{t('settings.lidl_copied')}</span>
+				{/if}
+			</div>
+		</Card.Content>
+	</Card.Root>
+
+	<Card.Root>
+		<Card.Header>
+			<Card.Title class="flex items-center gap-2">
+				<FlaskConical class="h-5 w-5" />
+				{t('settings.synthetic_title')}
+			</Card.Title>
+			<Card.Description>
+				{t('settings.synthetic_desc')}
+			</Card.Description>
+		</Card.Header>
+		<Card.Content class="space-y-4">
+			<div class="grid gap-3 sm:grid-cols-2">
+				<div>
+					<label class="mb-1 block text-sm text-muted-foreground" for="synthetic-store">
+						{t('settings.synthetic_store_label')}
+					</label>
+					<select
+						id="synthetic-store"
+						class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+						bind:value={syntheticStore}
+						disabled={isGeneratingSynthetic || isDeletingSynthetic}
+					>
+						<option value="all">{t('settings.synthetic_store_all')}</option>
+						<option value="rewe">{t('settings.synthetic_store_rewe')}</option>
+						<option value="lidl">{t('settings.synthetic_store_lidl')}</option>
+						<option value="kaufland">{t('settings.synthetic_store_kaufland')}</option>
+					</select>
+				</div>
+				<div>
+					<label class="mb-1 block text-sm text-muted-foreground" for="synthetic-count">
+						{t('settings.synthetic_count_label')}
+					</label>
+					<input
+						id="synthetic-count"
+						type="number"
+						min="1"
+						max="50"
+						class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+						bind:value={syntheticCountPerStore}
+						onblur={() => {
+							syntheticCountPerStore = clampSyntheticCount(syntheticCountPerStore);
+						}}
+						disabled={isGeneratingSynthetic || isDeletingSynthetic}
+					/>
+				</div>
+			</div>
+
+			<div class="flex flex-wrap gap-3">
+				<Button onclick={handleGenerateSynthetic} disabled={!canGenerateSynthetic}>
+					{isGeneratingSynthetic
+						? t('settings.synthetic_generating')
+						: t('settings.synthetic_generate_button')}
+				</Button>
+				<Button
+					onclick={handleDeleteSynthetic}
+					variant="destructive"
+					disabled={!canDeleteSynthetic}
+				>
+					<Trash2 class="mr-2 h-4 w-4" />
+					{isDeletingSynthetic
+						? t('settings.synthetic_deleting')
+						: t('settings.synthetic_delete_button')}
+				</Button>
+			</div>
+
+			{#if syntheticSuccessMessage}
+				<div
+					class="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700"
+				>
+					{syntheticSuccessMessage}
+				</div>
+			{/if}
+
+			{#if syntheticErrorMessage}
+				<div
+					class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+				>
+					{syntheticErrorMessage}
+				</div>
+			{/if}
+		</Card.Content>
+	</Card.Root>
 
 	<Card.Root class="border-destructive/40">
 		<Card.Header>
 			<Card.Title class="flex items-center gap-2 text-destructive">
 				<AlertTriangle class="h-5 w-5" />
-				Hard Reset
+				{t('settings.hard_reset')}
 			</Card.Title>
 			<Card.Description>
-				This clears all imported data and taxonomy changes, then reseeds the default categories and
-				rules.
+				{t('settings.hard_reset_desc')}
 			</Card.Description>
 		</Card.Header>
 		<Card.Content class="space-y-4">
-			<div class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-				Type <span class="font-semibold">RESET</span> to unlock this action.
+			<div
+				class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+			>
+				{@html t('settings.hard_reset_type')}
 			</div>
 
 			<div class="flex flex-col gap-3 sm:flex-row sm:items-end">
 				<div class="sm:flex-1">
 					<label class="mb-1 block text-sm text-muted-foreground" for="reset-confirmation">
-						Confirmation
+						{t('settings.hard_reset_label')}
 					</label>
 					<input
 						id="reset-confirmation"
 						type="text"
 						class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
 						bind:value={confirmationInput}
-						placeholder="Type RESET"
+						placeholder={t('settings.hard_reset_placeholder')}
 						autocomplete="off"
 					/>
 				</div>
@@ -174,18 +421,22 @@
 					variant="destructive"
 				>
 					<RotateCcw class="mr-2 h-4 w-4" />
-					{isResetting ? 'Resetting...' : 'Run Hard Reset'}
+					{isResetting ? t('settings.hard_reset_resetting') : t('settings.hard_reset_run')}
 				</Button>
 			</div>
 
 			{#if successMessage}
-				<div class="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700">
+				<div
+					class="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700"
+				>
 					{successMessage}
 				</div>
 			{/if}
 
 			{#if errorMessage}
-				<div class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+				<div
+					class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+				>
 					{errorMessage}
 				</div>
 			{/if}
@@ -194,51 +445,71 @@
 
 	<Card.Root>
 		<Card.Header>
-			<Card.Title>Debug Import (Raw PDF Text)</Card.Title>
+			<Card.Title>{t('settings.debug_title')}</Card.Title>
 			<Card.Description>
-				Upload a PDF to extract raw text with no parser preprocessing. You can review or redact before
-				sharing.
+				{t('settings.debug_desc')}
 			</Card.Description>
 		</Card.Header>
 		<Card.Content class="space-y-4">
 			<div class="space-y-2">
-				<label class="block text-sm text-muted-foreground" for="debug-import-file">PDF file</label>
+				<label class="block text-sm text-muted-foreground" for="debug-import-file-hidden"
+					>{t('settings.debug_file_label')}</label
+				>
 				<input
-					id="debug-import-file"
+					id="debug-import-file-hidden"
 					type="file"
 					accept=".pdf,application/pdf"
 					onchange={handleDebugFileChange}
-					class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+					class="sr-only"
+					bind:this={debugFileInput}
 				/>
+				<div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+					<Button type="button" variant="outline" onclick={() => debugFileInput?.click()}>
+						{t('settings.debug_choose_file')}
+					</Button>
+					<div
+						class="min-h-9 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-muted-foreground"
+					>
+						<span class="block truncate">
+							{debugFile?.name || t('settings.debug_no_file')}
+						</span>
+					</div>
+				</div>
 			</div>
 
 			<div class="flex flex-wrap gap-3">
 				<Button onclick={handleExtractAndCopy} disabled={!canExtractDebugText} class="min-w-36">
-					{isExtracting ? 'Extracting...' : 'Extract & Copy'}
+					{isExtracting ? t('settings.debug_extracting') : t('settings.debug_extract_copy')}
 				</Button>
 				{#if debugText}
 					<Button onclick={handleCopyText} variant="outline" disabled={isExtracting}>
 						<Copy class="mr-2 h-4 w-4" />
-						Copy Text
+						{t('settings.debug_copy')}
 					</Button>
 				{/if}
 			</div>
 
 			{#if debugSuccessMessage}
-				<div class="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700">
+				<div
+					class="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700"
+				>
 					{debugSuccessMessage}
 				</div>
 			{/if}
 
 			{#if debugErrorMessage}
-				<div class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+				<div
+					class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+				>
 					{debugErrorMessage}
 				</div>
 			{/if}
 
 			{#if debugText}
 				<div class="space-y-2">
-					<label class="block text-sm text-muted-foreground" for="debug-import-text">Extracted text</label>
+					<label class="block text-sm text-muted-foreground" for="debug-import-text"
+						>{t('settings.debug_text_label')}</label
+					>
 					<textarea
 						id="debug-import-text"
 						bind:value={debugText}

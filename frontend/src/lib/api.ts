@@ -41,15 +41,62 @@ interface ApiError {
 	message: string;
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-	const res = await apiFetch(path, {
-		headers: { 'Content-Type': 'application/json', ...options?.headers },
-		...options
-	});
-	if (!res.ok) {
-		const error: ApiError = { status: res.status, message: await res.text() };
-		throw error;
+function extractApiErrorMessage(payload: unknown): string | null {
+	if (typeof payload === 'string') {
+		const message = payload.trim();
+		return message || null;
 	}
+
+	if (!payload || typeof payload !== 'object') {
+		return null;
+	}
+
+	const record = payload as Record<string, unknown>;
+	const detail = extractApiErrorMessage(record.detail);
+	if (detail) return detail;
+
+	const message = extractApiErrorMessage(record.message);
+	if (message) return message;
+
+	return null;
+}
+
+async function createApiError(res: Response): Promise<ApiError> {
+	const bodyText = await res.text();
+	const fallbackMessage = res.statusText || `Request failed with status ${res.status}`;
+
+	if (!bodyText.trim()) {
+		return { status: res.status, message: fallbackMessage };
+	}
+
+	try {
+		const payload = JSON.parse(bodyText) as unknown;
+		const parsedMessage = extractApiErrorMessage(payload);
+		if (parsedMessage) {
+			return { status: res.status, message: parsedMessage };
+		}
+	} catch {
+		// Fall back to raw text when the body is not valid JSON.
+	}
+
+	return { status: res.status, message: bodyText };
+}
+
+async function ensureOk(res: Response): Promise<Response> {
+	if (!res.ok) {
+		throw await createApiError(res);
+	}
+
+	return res;
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+	const res = await ensureOk(
+		await apiFetch(path, {
+			headers: { 'Content-Type': 'application/json', ...options?.headers },
+			...options
+		})
+	);
 	return res.json();
 }
 
@@ -72,18 +119,59 @@ export interface DebugImportTextResponse {
 	characters: number;
 }
 
+export type SyntheticStore = 'all' | 'rewe' | 'lidl' | 'kaufland';
+
+export interface SyntheticGenerateRequest {
+	store?: SyntheticStore;
+	count_per_store?: number;
+}
+
+export interface SyntheticStoreGenerationResult {
+	inserted: number;
+	skipped: number;
+}
+
+export interface SyntheticGenerateResponse {
+	stores: Record<string, SyntheticStoreGenerationResult>;
+	total_inserted: number;
+	total_skipped: number;
+}
+
+export interface SyntheticDeleteResponse {
+	deleted: Record<string, number>;
+}
+
 export function hardResetData() {
 	return request<HardResetSummary>('/api/settings/hard-reset', {
 		method: 'POST'
 	});
 }
 
+export function generateSyntheticData(body: SyntheticGenerateRequest) {
+	return request<SyntheticGenerateResponse>('/api/settings/synthetic/generate', {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
+}
+
+export function deleteSyntheticData() {
+	return request<SyntheticDeleteResponse>('/api/settings/synthetic', {
+		method: 'DELETE'
+	});
+}
+
 export async function extractDebugImportText(file: File): Promise<DebugImportTextResponse> {
 	const form = new FormData();
 	form.append('file', file);
-	const res = await apiFetch('/api/settings/debug-import-text', { method: 'POST', body: form });
-	if (!res.ok) throw { status: res.status, message: await res.text() };
+	const res = await ensureOk(
+		await apiFetch('/api/settings/debug-import-text', { method: 'POST', body: form })
+	);
 	return res.json();
+}
+
+export async function fetchLidlScraperScript(): Promise<string> {
+	const res = await ensureOk(await apiFetch('/api/import/lidl-scraper'));
+	return res.text();
 }
 
 // --- Categories ---
@@ -109,10 +197,7 @@ export function createCategory(data: { name: string; icon: string; color: string
 	});
 }
 
-export function updateCategory(
-	id: number,
-	data: { name?: string; icon?: string; color?: string }
-) {
+export function updateCategory(id: number, data: { name?: string; icon?: string; color?: string }) {
 	return request<ProductCategory>(`/api/categories/${id}`, {
 		method: 'PATCH',
 		body: JSON.stringify(data)
@@ -120,8 +205,7 @@ export function updateCategory(
 }
 
 export async function deleteCategory(id: number) {
-	const res = await apiFetch(`/api/categories/${id}`, { method: 'DELETE' });
-	if (!res.ok) throw { status: res.status, message: await res.text() };
+	await ensureOk(await apiFetch(`/api/categories/${id}`, { method: 'DELETE' }));
 }
 
 // --- Import (Feature 2/3) ---
@@ -164,13 +248,15 @@ export interface PreviewResponse {
 	total_bonus: number;
 	bonus_balance: number | null;
 	computed_total: number;
+	template_id: number | null;
+	template_slug: string;
+	template_name: string;
 }
 
-export async function uploadForPreview(file: File): Promise<PreviewResponse> {
+export async function uploadForPreview(file: File): Promise<PreviewResponse[]> {
 	const form = new FormData();
 	form.append('file', file);
-	const res = await apiFetch('/api/import/preview', { method: 'POST', body: form });
-	if (!res.ok) throw { status: res.status, message: await res.text() };
+	const res = await ensureOk(await apiFetch('/api/import/preview', { method: 'POST', body: form }));
 	return res.json();
 }
 
@@ -181,8 +267,9 @@ export interface DebugTextResponse {
 export async function uploadForDebugText(file: File): Promise<DebugTextResponse> {
 	const form = new FormData();
 	form.append('file', file);
-	const res = await apiFetch('/api/import/debug-text', { method: 'POST', body: form });
-	if (!res.ok) throw { status: res.status, message: await res.text() };
+	const res = await ensureOk(
+		await apiFetch('/api/import/debug-text', { method: 'POST', body: form })
+	);
 	return res.json();
 }
 
@@ -213,6 +300,7 @@ export interface ConfirmRequest {
 	bonus_entries: BonusInfo[];
 	total_bonus: number;
 	bonus_balance: number | null;
+	template_id: number | null;
 }
 
 export interface ConfirmResponse {
@@ -236,6 +324,7 @@ export interface Receipt {
 	store_address: string;
 	total_amount: number;
 	total_bonus: number;
+	redeemed_bonus: number;
 	source_filename: string;
 	item_count: number;
 }
@@ -289,18 +378,20 @@ export function fetchReceiptDetail(id: number) {
 }
 
 export async function deleteReceipt(id: number) {
-	const res = await apiFetch(`/api/receipts/${id}`, { method: 'DELETE' });
-	if (!res.ok) throw { status: res.status, message: await res.text() };
+	await ensureOk(await apiFetch(`/api/receipts/${id}`, { method: 'DELETE' }));
 }
 
 export function updateItemCategory(receiptId: number, itemId: number, categoryId: number | null) {
-	return request<{ id: number; category_id: number | null; is_manual_assignment: boolean; category_name: string | null; category_icon: string | null }>(
-		`/api/receipts/${receiptId}/items/${itemId}`,
-		{
-			method: 'PATCH',
-			body: JSON.stringify({ category_id: categoryId })
-		}
-	);
+	return request<{
+		id: number;
+		category_id: number | null;
+		is_manual_assignment: boolean;
+		category_name: string | null;
+		category_icon: string | null;
+	}>(`/api/receipts/${receiptId}/items/${itemId}`, {
+		method: 'PATCH',
+		body: JSON.stringify({ category_id: categoryId })
+	});
 }
 
 // --- Rules (Feature 5) ---
@@ -331,7 +422,10 @@ export function createRule(data: {
 	});
 }
 
-export function updateRule(id: number, data: Partial<Omit<CategorizeRule, 'id' | 'category_name'>>) {
+export function updateRule(
+	id: number,
+	data: Partial<Omit<CategorizeRule, 'id' | 'category_name'>>
+) {
 	return request<CategorizeRule>(`/api/rules/${id}`, {
 		method: 'PATCH',
 		body: JSON.stringify(data)
@@ -339,8 +433,7 @@ export function updateRule(id: number, data: Partial<Omit<CategorizeRule, 'id' |
 }
 
 export async function deleteRule(id: number) {
-	const res = await apiFetch(`/api/rules/${id}`, { method: 'DELETE' });
-	if (!res.ok) throw { status: res.status, message: await res.text() };
+	await ensureOk(await apiFetch(`/api/rules/${id}`, { method: 'DELETE' }));
 }
 
 export function deleteAllRules() {
@@ -466,7 +559,11 @@ export interface OverviewStats {
 	item_count: number;
 	avg_basket: number;
 	total_bonus: number;
+	instant_discount: number;
+	basket_discount: number;
+	program_savings: number;
 	redeemed_bonus: number;
+	total_deductions: number;
 }
 
 export interface CategorySpend {
@@ -478,9 +575,20 @@ export interface CategorySpend {
 	item_count: number;
 }
 
+export interface StoreSpend {
+	store_name: string;
+	total_spent: number;
+	receipt_count: number;
+	avg_basket: number;
+	share_percent: number;
+}
+
 export interface MonthlySpend {
 	month: string; // YYYY-MM
 	total_spent: number;
+	redeemed_bonus: number;
+	instant_discount: number;
+	basket_discount: number;
 	receipt_count: number;
 }
 
@@ -488,6 +596,34 @@ export interface MonthlyBonusStat {
 	month: string; // YYYY-MM
 	total_spent: number;
 	earned_bonus: number;
+	instant_discount: number;
+	basket_discount: number;
+	program_savings: number;
+	redeemed_bonus: number;
+	bonus_rate: number;
+	receipt_count: number;
+}
+
+export interface StoreBonusStat {
+	store_name: string;
+	total_spent: number;
+	earned_bonus: number;
+	instant_discount: number;
+	basket_discount: number;
+	program_savings: number;
+	redeemed_bonus: number;
+	bonus_rate: number;
+	receipt_count: number;
+}
+
+export interface MonthlyBonusByShopStat {
+	month: string; // YYYY-MM
+	store_name: string;
+	total_spent: number;
+	earned_bonus: number;
+	instant_discount: number;
+	basket_discount: number;
+	program_savings: number;
 	redeemed_bonus: number;
 	bonus_rate: number;
 	receipt_count: number;
@@ -527,12 +663,24 @@ export function fetchCategoryBreakdown(includeDeposit = false) {
 	return request<CategorySpend[]>(`/api/stats/category-breakdown?${params.toString()}`);
 }
 
+export function fetchStoreBreakdown() {
+	return request<StoreSpend[]>('/api/stats/store-breakdown');
+}
+
 export function fetchMonthlyTrend() {
 	return request<MonthlySpend[]>('/api/stats/monthly-trend');
 }
 
 export function fetchMonthlyBonus() {
 	return request<MonthlyBonusStat[]>('/api/stats/monthly-bonus');
+}
+
+export function fetchStoreBonusBreakdown() {
+	return request<StoreBonusStat[]>('/api/stats/store-bonus-breakdown');
+}
+
+export function fetchMonthlyBonusByShop() {
+	return request<MonthlyBonusByShopStat[]>('/api/stats/monthly-bonus-by-shop');
 }
 
 export function fetchCategoryMonthly() {

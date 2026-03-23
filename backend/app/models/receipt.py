@@ -34,3 +34,6 @@ class Receipt(SQLModel, table=True):
     # Import tracking
     source_filename: str = Field(default="")
     imported_at: datetime = Field(default_factory=datetime.now)
+
+    # Parser template used for this receipt
+    template_id: int | None = Field(default=None, foreign_key="parser_template.id")

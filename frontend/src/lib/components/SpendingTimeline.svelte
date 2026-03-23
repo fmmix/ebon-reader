@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import {
 		Chart,
 		BarController,
@@ -10,6 +9,9 @@
 		Filler
 	} from 'chart.js';
 	import type { MonthlySpend } from '$lib/api';
+	import { formatMonth, formatCurrency } from '$lib/utils/format';
+	import { resolveCssVarColor, withAlpha } from '$lib/utils/chart-colors';
+	import { t } from '$lib/i18n/index.svelte';
 
 	Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Filler);
 
@@ -17,143 +19,90 @@
 
 	let canvas = $state<HTMLCanvasElement>();
 	let chart: Chart<'bar'> | null = null;
-	let colorCtx: CanvasRenderingContext2D | null = null;
 
-	function formatMonth(ym: string): string {
-		const [y, m] = ym.split('-');
-		const months = [
-			'Jan',
-			'Feb',
-			'Mar',
-			'Apr',
-			'May',
-			'Jun',
-			'Jul',
-			'Aug',
-			'Sep',
-			'Oct',
-			'Nov',
-			'Dec'
-		];
-		return `${months[parseInt(m) - 1]} ${y.slice(2)}`;
+	function capitalizeLabel(label: string) {
+		return label.length > 0 ? `${label[0].toUpperCase()}${label.slice(1)}` : label;
 	}
 
-	function toCanvasColor(color: string, fallback: string): string {
-		if (typeof document === 'undefined') return fallback;
-
-		if (!colorCtx) {
-			const colorCanvas = document.createElement('canvas');
-			colorCtx = colorCanvas.getContext('2d');
+	function destroyChart() {
+		if (chart) {
+			chart.destroy();
+			chart = null;
 		}
-
-		if (!colorCtx) return fallback;
-
-		colorCtx.fillStyle = fallback;
-		const baseline = colorCtx.fillStyle;
-		colorCtx.fillStyle = color;
-
-		const normalized = colorCtx.fillStyle;
-		return normalized && normalized !== baseline ? normalized : baseline;
-	}
-
-	function resolveCssVarColor(varName: string, fallback: string): string {
-		if (typeof document === 'undefined') return fallback;
-
-		const el = document.createElement('span');
-		el.style.position = 'absolute';
-		el.style.visibility = 'hidden';
-		el.style.pointerEvents = 'none';
-		el.style.color = `var(${varName})`;
-
-		document.body.appendChild(el);
-
-		try {
-			const resolved = getComputedStyle(el).color.trim();
-			return toCanvasColor(resolved || fallback, fallback);
-		} finally {
-			el.remove();
-		}
-	}
-
-	function withAlpha(color: string, alpha: number, fallback: string): string {
-		const normalized = toCanvasColor(color, fallback).trim();
-		let r = 0;
-		let g = 0;
-		let b = 0;
-
-		const hex = normalized.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
-		if (hex) {
-			const value = hex[1];
-			if (value.length === 3) {
-				r = parseInt(value[0] + value[0], 16);
-				g = parseInt(value[1] + value[1], 16);
-				b = parseInt(value[2] + value[2], 16);
-			} else {
-				r = parseInt(value.slice(0, 2), 16);
-				g = parseInt(value.slice(2, 4), 16);
-				b = parseInt(value.slice(4, 6), 16);
-			}
-		} else {
-			const rgb = normalized.match(
-				/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(?:\d*\.?\d+))?\s*\)$/i
-			);
-			if (!rgb) {
-				const fallbackNormalized = toCanvasColor(fallback, fallback).trim();
-				const fallbackRgb = fallbackNormalized.match(
-					/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(?:\d*\.?\d+))?\s*\)$/i
-				);
-				if (!fallbackRgb) return `rgba(59, 130, 246, ${Math.max(0, Math.min(1, alpha))})`;
-				r = Number(fallbackRgb[1]);
-				g = Number(fallbackRgb[2]);
-				b = Number(fallbackRgb[3]);
-			} else {
-				r = Number(rgb[1]);
-				g = Number(rgb[2]);
-				b = Number(rgb[3]);
-			}
-		}
-
-		const clampedAlpha = Math.max(0, Math.min(1, alpha));
-
-		return `rgba(${r}, ${g}, ${b}, ${clampedAlpha})`;
 	}
 
 	function buildChart() {
-		if (chart) chart.destroy();
+		destroyChart();
 		if (!canvas || data.length === 0) return;
 
 		const ctx = canvas.getContext('2d');
 		if (!ctx) return;
 
-		const chartBar = resolveCssVarColor('--chart-2', 'rgb(45, 212, 191)');
+		const paidBar = resolveCssVarColor('--chart-1', 'rgb(59, 130, 246)');
+		const deductionBar = resolveCssVarColor('--chart-2', 'rgb(45, 212, 191)');
+		const paidTooltipMarker = withAlpha(paidBar, 0.72, 'rgb(59, 130, 246)');
+		const deductionFill = withAlpha(deductionBar, 0.22, 'rgb(45, 212, 191)');
+		const deductionStroke = withAlpha(deductionBar, 0.38, 'rgb(45, 212, 191)');
 		const mutedForeground = resolveCssVarColor('--muted-foreground', 'rgb(203, 213, 225)');
 		const border = resolveCssVarColor('--border', 'rgb(71, 85, 105)');
 		const popover = resolveCssVarColor('--popover', 'rgb(15, 23, 42)');
 		const popoverForeground = resolveCssVarColor('--popover-foreground', 'rgb(248, 250, 252)');
+		const paidTooltipLabel = capitalizeLabel(t('dashboard.paid_label'));
 
-		// Gradient fill
+		// Per-month deductions
+		const deductions = data.map(
+			(d) => (d.redeemed_bonus ?? 0) + (d.instant_discount ?? 0) + (d.basket_discount ?? 0)
+		);
+		const hasDeductions = deductions.some((d) => d > 0);
+
+		// Paid = basket value minus deductions
+		const paid = data.map((d, i) => d.total_spent - deductions[i]);
+
+		// Gradient fill for paid portion
 		const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-		gradient.addColorStop(0, withAlpha(chartBar, 0.95, 'rgb(45, 212, 191)'));
-		gradient.addColorStop(1, withAlpha(chartBar, 0.45, 'rgb(45, 212, 191)'));
+		gradient.addColorStop(0, withAlpha(paidBar, 0.92, 'rgb(59, 130, 246)'));
+		gradient.addColorStop(0.55, withAlpha(paidBar, 0.72, 'rgb(59, 130, 246)'));
+		gradient.addColorStop(1, withAlpha(paidBar, 0.42, 'rgb(59, 130, 246)'));
+
+		const datasets: any[] = [
+			{
+				label: t('dashboard.paid_label'),
+				tooltipLabel: paidTooltipLabel,
+				data: paid,
+				backgroundColor: gradient,
+				borderColor: withAlpha(paidBar, 0.8, 'rgb(59, 130, 246)'),
+				borderWidth: 1.5,
+				borderRadius: hasDeductions ? { bottomLeft: 6, bottomRight: 6 } : 6,
+				borderSkipped: false
+			}
+		];
+
+		if (hasDeductions) {
+				datasets.push({
+					label: t('dashboard.deductions'),
+					tooltipLabel: t('dashboard.deductions'),
+					data: deductions,
+					backgroundColor: deductionFill,
+					borderColor: deductionStroke,
+					borderWidth: 1,
+					borderRadius: { topLeft: 6, topRight: 6 },
+					borderSkipped: false
+			});
+		}
 
 		chart = new Chart(canvas, {
 			type: 'bar',
 			data: {
 				labels: data.map((d) => formatMonth(d.month)),
-				datasets: [
-					{
-						data: data.map((d) => d.total_spent),
-						backgroundColor: gradient,
-						borderColor: withAlpha(chartBar, 0.75, 'rgb(45, 212, 191)'),
-						borderWidth: 1.5,
-						borderRadius: 6,
-						borderSkipped: false
-					}
-				]
+				datasets
 			},
 			options: {
 				responsive: true,
 				maintainAspectRatio: false,
+				interaction: {
+					mode: 'index',
+					intersect: false
+				},
 				plugins: {
 					legend: { display: false },
 					tooltip: {
@@ -164,13 +113,45 @@
 						borderWidth: 1,
 						padding: 10,
 						cornerRadius: 8,
+						multiKeyBackground: 'transparent',
+						displayColors: true,
+						usePointStyle: true,
+						itemSort: (a, b) => b.datasetIndex - a.datasetIndex,
 						callbacks: {
-							label: (ctx) => ` €${(ctx.parsed.y ?? 0).toFixed(2)}`
+							beforeBody: (tooltipItems) => {
+								const idx = tooltipItems[0]?.dataIndex;
+								if (idx === undefined) return [];
+								return [`${t('dashboard.basket_total')}: ${formatCurrency(data[idx].total_spent)}`];
+							},
+							label: (tooltipCtx) => {
+								const dataset = tooltipCtx.dataset as { tooltipLabel?: string };
+								const value = typeof tooltipCtx.parsed.y === 'number' ? tooltipCtx.parsed.y : 0;
+								const formattedValue =
+									tooltipCtx.datasetIndex === 1
+										? `-${formatCurrency(value)}`
+										: formatCurrency(value);
+								return `${dataset.tooltipLabel ?? tooltipCtx.dataset.label}: ${formattedValue}`;
+							},
+							labelColor: (tooltipCtx) => ({
+								borderColor:
+									tooltipCtx.datasetIndex === 1
+										? deductionStroke
+										: withAlpha(paidBar, 0.8, 'rgb(59, 130, 246)'),
+								backgroundColor:
+									tooltipCtx.datasetIndex === 1 ? deductionFill : paidTooltipMarker,
+								borderWidth: 1,
+								borderRadius: 3
+							}),
+							labelPointStyle: () => ({
+								pointStyle: 'rectRounded',
+								rotation: 0
+							})
 						}
 					}
 				},
 				scales: {
 					x: {
+						stacked: true,
 						grid: { display: false },
 						ticks: {
 							color: mutedForeground,
@@ -179,13 +160,14 @@
 						border: { display: false }
 					},
 					y: {
+						stacked: true,
 						grid: {
 							color: withAlpha(border, 0.25, 'rgb(71, 85, 105)')
 						},
 						ticks: {
 							color: mutedForeground,
 							font: { size: 11 },
-							callback: (val) => `€${val}`
+							callback: (val) => formatCurrency(typeof val === 'number' ? val : Number(val))
 						},
 						border: { display: false }
 					}
@@ -194,19 +176,22 @@
 		});
 	}
 
-	onMount(() => {
-		buildChart();
-	});
-
 	$effect(() => {
-		if (data && canvas) buildChart();
+		void data;
+		if (canvas) {
+			buildChart();
+		}
+
+		return () => {
+			destroyChart();
+		};
 	});
 </script>
 
 <div class="relative h-64 w-full">
 	{#if data.length === 0}
 		<div class="flex h-full items-center justify-center text-sm text-muted-foreground">
-			No spending data yet
+			{t('dashboard.no_spending_data')}
 		</div>
 	{:else}
 		<canvas bind:this={canvas}></canvas>

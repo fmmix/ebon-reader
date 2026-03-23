@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,8 +26,14 @@ from app.models.receipt_item import ReceiptItem  # noqa: F401
 from app.models.bonus_entry import BonusEntry  # noqa: F401
 from app.models.learned_mapping import LearnedMapping  # noqa: F401
 from app.models.taxonomy_backup import TaxonomyBackup  # noqa: F401
+from app.models.parser_template import ParserTemplate  # noqa: F401
+
+import app.services.parser  # noqa: F401 — triggers parser registration
 
 from sqlmodel import Session
+
+
+logging.getLogger("pdfminer.pdffont").setLevel(logging.ERROR)
 
 
 @asynccontextmanager
@@ -40,7 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.1.0",
+    version=os.getenv("APP_VERSION", "dev"),
     lifespan=lifespan,
 )
 

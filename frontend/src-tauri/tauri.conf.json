@@ -22,7 +22,7 @@
   },
 	"bundle": {
 		"active": true,
-		"targets": "nsis",
+		"targets": "all",
 		"externalBin": ["binaries/ebon_backend"],
 		"icon": [
 			"icons/32x32.png",

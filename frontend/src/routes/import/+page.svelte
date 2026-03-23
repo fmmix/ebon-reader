@@ -26,8 +26,14 @@
 		type ParsedItem,
 		type ProductCategory
 	} from '$lib/api';
+	import { formatDateTime } from '$lib/utils/date';
 	import { formatVatClass } from '$lib/utils/vat';
 	import { onMount } from 'svelte';
+	import { t } from '$lib/i18n/index.svelte';
+	import { formatCurrency } from '$lib/utils/format';
+	import { bonusTypeLabel, isDeductionBonusType, computeProgramSavings } from '$lib/utils/bonus';
+	import { findUncategorizedId } from '$lib/utils/category';
+	import { clampPriority } from '$lib/utils/rules';
 
 	// --- Types ---
 	type ItemRuleCreateState = 'idle' | 'saving' | 'created' | 'exists' | 'error';
@@ -90,18 +96,14 @@
 	let errorCount = $derived(queue.filter((e) => e.status === 'error').length);
 	let currentRequiredValidation = $derived(current ? validateRequiredFields(current) : null);
 	let currentHasAnomaly = $derived(current ? hasEntryAnomaly(current) : false);
-	let currentShowsReviewPanel = $derived(current ? current.requiresReview || currentHasAnomaly : false);
+	let currentShowsReviewPanel = $derived(
+		current ? current.requiresReview || currentHasAnomaly : false
+	);
 	let currentHasRequiredFieldEdits = $derived(current ? hasRequiredFieldEdits(current) : false);
 	let currentReviewPanelState = $derived(current ? getReviewPanelState(current) : null);
+	let uncategorizedId = $derived(findUncategorizedId(categories));
 
 	const DEFAULT_RULE_PRIORITY = 20;
-
-	function clampPriority(value: number): number {
-		if (!Number.isFinite(value)) {
-			return DEFAULT_RULE_PRIORITY;
-		}
-		return Math.min(100, Math.max(0, Math.round(value)));
-	}
 
 	function toDateTimeLocalValue(value: string): string {
 		if (!value) return '';
@@ -128,11 +130,11 @@
 		const parsedAmount = parseAmountInput(entry.editableTotalAmount);
 		let amountError: string | null = null;
 		if (!entry.editableTotalAmount.trim()) {
-			amountError = 'Amount is required.';
+			amountError = t('import.err_amount_required');
 		} else if (parsedAmount === null) {
-			amountError = 'Enter a valid number.';
+			amountError = t('import.err_invalid_number');
 		} else if (parsedAmount <= 0) {
-			amountError = 'Amount must be greater than 0.';
+			amountError = t('import.err_amount_positive');
 		}
 
 		const purchasedAtRaw = entry.editablePurchasedAt.trim();
@@ -144,9 +146,9 @@
 				? `${purchasedAtRaw}:00`
 				: purchasedAtRaw;
 		const purchasedAtError = !purchasedAtRaw
-			? 'Purchase date and time is required.'
+			? t('import.err_date_required')
 			: purchasedAtInvalid
-				? 'Enter a valid date and time.'
+				? t('import.err_invalid_date')
 				: null;
 
 		return {
@@ -167,27 +169,15 @@
 		const editablePurchasedAt = entry.editablePurchasedAt.trim();
 		const editableDate = editablePurchasedAt ? new Date(editablePurchasedAt) : null;
 		if (editableDate && !Number.isNaN(editableDate.getTime())) {
-			return editableDate.toLocaleString('de-DE', {
-				day: '2-digit',
-				month: '2-digit',
-				year: 'numeric',
-				hour: '2-digit',
-				minute: '2-digit'
-			});
+			return formatDateTime(editableDate);
 		}
 
 		const previewDate = new Date(entry.preview.purchased_at);
 		if (!Number.isNaN(previewDate.getTime())) {
-			return previewDate.toLocaleString('de-DE', {
-				day: '2-digit',
-				month: '2-digit',
-				year: 'numeric',
-				hour: '2-digit',
-				minute: '2-digit'
-			});
+			return formatDateTime(previewDate);
 		}
 
-		return 'Missing purchase date/time';
+		return t('import.err_missing_date');
 	}
 
 	function hasTotalMismatch(entry: QueueEntry): boolean {
@@ -220,12 +210,12 @@
 
 	function getValidationErrorMessage(validation: RequiredFieldValidation): string {
 		if (validation.amountError && validation.purchasedAtError) {
-			return 'Required fields are invalid. Please fix amount and purchase date/time in the anomaly panel.';
+			return t('import.err_fields_invalid');
 		}
 		if (validation.amountError) {
-			return 'Required amount is invalid. Please fix it in the anomaly panel.';
+			return t('import.err_amount_invalid');
 		}
-		return 'Required purchase date/time is invalid. Please fix it in the anomaly panel.';
+		return t('import.err_date_invalid');
 	}
 
 	function getDefaultRuleKeyword(item: ParsedItem | undefined): string {
@@ -246,61 +236,74 @@
 
 	// --- Handlers ---
 	async function handleFiles(files: FileList | File[]) {
-		const pdfs = Array.from(files).filter((f) => f.name.toLowerCase().endsWith('.pdf'));
-		if (pdfs.length === 0) {
-			error = 'No PDF files found';
+		const supportedFiles = Array.from(files).filter((f) => {
+			const lower = f.name.toLowerCase();
+			return lower.endsWith('.pdf') || lower.endsWith('.json') || lower.endsWith('.txt');
+		});
+		if (supportedFiles.length === 0) {
+			error = t('import.err_no_valid');
 			return;
 		}
 
 		error = '';
 		parseErrors = [];
 		phase = 'parsing';
-		parseProgress = { done: 0, total: pdfs.length };
+		parseProgress = { done: 0, total: supportedFiles.length };
 		queue = [];
 		currentIndex = 0;
 
 		// Parse all in parallel (batched to avoid overwhelming the server)
 		const batchSize = 5;
-		for (let i = 0; i < pdfs.length; i += batchSize) {
-			const batch = pdfs.slice(i, i + batchSize);
+		for (let i = 0; i < supportedFiles.length; i += batchSize) {
+			const batch = supportedFiles.slice(i, i + batchSize);
 			const results = await Promise.allSettled(
 				batch.map(async (file) => {
-					const result = await uploadForPreview(file);
-					return { filename: file.name, result };
+					const previews = await uploadForPreview(file);
+					return { filename: file.name, previews };
 				})
 			);
 
 			for (const res of results) {
 				parseProgress.done++;
 				if (res.status === 'fulfilled') {
-					const { result } = res.value;
-					const ruleDraftByItem = result.items.reduce<Record<number, ItemRuleDraft>>(
-							(acc, item, index) => {
-								acc[index] = {
+					const { filename, previews } = res.value;
+					if (previews.length === 0) {
+						parseErrors.push(`${filename}: ${t('import.err_parse_failed')}`);
+						continue;
+					}
+
+					for (let index = 0; index < previews.length; index++) {
+						const result = previews[index];
+						const ruleDraftByItem = result.items.reduce<Record<number, ItemRuleDraft>>(
+							(acc, item, itemIndex) => {
+								acc[itemIndex] = {
 									keyword: getDefaultRuleKeyword(item),
 									matchType: getDefaultRuleMatchType(item),
 									priority: getDefaultRulePriority(item)
 								};
 								return acc;
 							},
-						{}
-					);
-					const entry: QueueEntry = {
-						filename: res.value.filename,
-						preview: result,
-						items: [...result.items],
-						ruleCreateByItem: {},
-						ruleDraftByItem,
-						editableTotalAmount:
-							Number.isFinite(result.total_amount) ? result.total_amount.toFixed(2) : '',
-						editablePurchasedAt: toDateTimeLocalValue(result.purchased_at),
-						requiresReview: false,
-						status: 'pending'
-					};
-					entry.requiresReview = hasEntryAnomaly(entry);
-					queue.push(entry);
+							{}
+						);
+
+						const entry: QueueEntry = {
+							filename: previews.length > 1 ? `${filename} #${index + 1}` : filename,
+							preview: result,
+							items: [...result.items],
+							ruleCreateByItem: {},
+							ruleDraftByItem,
+							editableTotalAmount: Number.isFinite(result.total_amount)
+								? result.total_amount.toFixed(2)
+								: '',
+							editablePurchasedAt: toDateTimeLocalValue(result.purchased_at),
+							requiresReview: false,
+							status: 'pending'
+						};
+						entry.requiresReview = hasEntryAnomaly(entry);
+						queue.push(entry);
+					}
 				} else {
-					const errMsg = (res.reason as any)?.message || 'Parse failed';
+					const errMsg = (res.reason as any)?.message || t('import.err_parse_failed');
 					parseErrors.push(errMsg);
 				}
 			}
@@ -309,7 +312,7 @@
 		}
 
 		if (queue.length === 0) {
-			error = 'All files failed to parse';
+			error = t('import.err_all_failed');
 			phase = 'idle';
 			return;
 		}
@@ -416,11 +419,7 @@
 		queue = [...queue];
 	}
 
-	function setCurrentItemRuleStatus(
-		index: number,
-		state: ItemRuleCreateState,
-		message?: string
-	) {
+	function setCurrentItemRuleStatus(index: number, state: ItemRuleCreateState, message?: string) {
 		if (!current) return;
 		current.ruleCreateByItem = {
 			...current.ruleCreateByItem,
@@ -436,23 +435,19 @@
 
 		const item = current.items[index];
 		if (!item || item.category_id === null) {
-			setCurrentItemRuleStatus(index, 'error', 'Select a category first.');
+			setCurrentItemRuleStatus(index, 'error', t('import.err_select_category'));
 			return;
 		}
 
 		if (!isCreateRuleAllowedForItem(index)) {
-			setCurrentItemRuleStatus(
-				index,
-				'error',
-				'Already auto-categorized; change keyword, match type, priority, or category to create a rule.'
-			);
+			setCurrentItemRuleStatus(index, 'error', t('import.err_already_auto'));
 			return;
 		}
 
 		const draft = getCurrentItemRuleDraft(index);
 		const keyword = draft.keyword.trim();
 		if (!keyword) {
-			setCurrentItemRuleStatus(index, 'error', 'Keyword is required.');
+			setCurrentItemRuleStatus(index, 'error', t('import.err_keyword_required'));
 			return;
 		}
 
@@ -471,7 +466,7 @@
 				setCurrentItemRuleStatus(index, 'exists');
 				return;
 			}
-			setCurrentItemRuleStatus(index, 'error', 'Failed to save rule.');
+			setCurrentItemRuleStatus(index, 'error', t('import.err_rule_save_failed'));
 		}
 	}
 
@@ -532,7 +527,8 @@
 				})),
 				bonus_entries: current.preview.bonus_entries,
 				total_bonus: current.preview.total_bonus,
-				bonus_balance: current.preview.bonus_balance
+				bonus_balance: current.preview.bonus_balance,
+				template_id: current.preview.template_id ?? null
 			});
 			current.status = 'confirmed';
 			queue = [...queue];
@@ -542,7 +538,7 @@
 				current.status = 'skipped';
 			} else {
 				current.status = 'error';
-				current.errorMsg = e?.message || 'Failed to import';
+				current.errorMsg = e?.message || t('import.err_failed_import');
 			}
 			queue = [...queue];
 			moveToNext();
@@ -589,21 +585,22 @@
 						total_amount: validation.normalizedTotalAmount!,
 						tse_transaction: entry.preview.tse_transaction,
 						source_filename: entry.filename,
-					items: entry.items.map((it, index) => ({
-						raw_name: it.raw_name,
-						display_name: it.display_name,
-						unit_price: it.unit_price,
-						quantity: it.quantity,
-						total_price: it.total_price,
-						vat_class: it.vat_class,
-						is_deposit: it.is_deposit,
-						category_id: it.category_id,
-						is_manual_assignment:
-							it.category_id !== (entry.preview.items[index]?.category_id ?? null)
-					})),
+						items: entry.items.map((it, index) => ({
+							raw_name: it.raw_name,
+							display_name: it.display_name,
+							unit_price: it.unit_price,
+							quantity: it.quantity,
+							total_price: it.total_price,
+							vat_class: it.vat_class,
+							is_deposit: it.is_deposit,
+							category_id: it.category_id,
+							is_manual_assignment:
+								it.category_id !== (entry.preview.items[index]?.category_id ?? null)
+						})),
 						bonus_entries: entry.preview.bonus_entries,
 						total_bonus: entry.preview.total_bonus,
-						bonus_balance: entry.preview.bonus_balance
+						bonus_balance: entry.preview.bonus_balance,
+						template_id: entry.preview.template_id ?? null
 					});
 					entry.status = 'confirmed';
 				} catch (e: any) {
@@ -611,7 +608,7 @@
 						entry.status = 'skipped';
 					} else {
 						entry.status = 'error';
-						entry.errorMsg = e?.message || 'Failed to import';
+						entry.errorMsg = e?.message || t('import.err_failed_import');
 					}
 				}
 				queue = [...queue];
@@ -648,8 +645,8 @@
 
 <div class="space-y-6">
 	<div>
-		<h1 class="text-3xl font-bold text-foreground">Import eBon</h1>
-		<p class="mt-1 text-muted-foreground">Upload supermarket receipt PDFs to extract items</p>
+		<h1 class="text-3xl font-bold text-foreground">{t('import.title')}</h1>
+		<p class="mt-1 text-muted-foreground">{t('import.subtitle')}</p>
 	</div>
 
 	<!-- Error -->
@@ -666,36 +663,38 @@
 	{#if phase === 'idle'}
 		<input
 			type="file"
-			accept=".pdf"
+			accept=".pdf,.json,.txt"
 			multiple
 			class="hidden"
 			bind:this={fileInput}
 			onchange={onFileSelect}
 		/>
 
-		<button class="w-full" onclick={() => fileInput?.click()}>
-			<Card.Root
-				class="flex min-h-[300px] flex-col items-center justify-center border-2 border-dashed transition-colors {dragOver
-					? 'border-primary bg-accent/30'
-					: 'hover:border-primary/50 hover:bg-accent/20'}"
-				role="button"
-				ondrop={onDrop}
-				ondragover={onDragOver}
-				ondragleave={onDragLeave}
-			>
-				<Card.Content class="flex flex-col items-center py-10">
-					<FileUp class="mb-4 h-12 w-12 text-muted-foreground" />
-					<p class="text-lg font-medium text-foreground">Drop your eBon PDFs here</p>
-					<p class="mt-1 text-sm text-muted-foreground">
-						or click to browse — supports multiple files
-					</p>
-					<div class="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
-						<FileText class="h-3.5 w-3.5" />
-						Supported: REWE eBon (.pdf)
-					</div>
-				</Card.Content>
-			</Card.Root>
-		</button>
+		<div>
+			<button class="w-full" onclick={() => fileInput?.click()}>
+				<Card.Root
+					class="flex min-h-[250px] flex-col items-center justify-center border-2 border-dashed transition-colors {dragOver
+						? 'border-primary bg-accent/30'
+						: 'hover:border-primary/50 hover:bg-accent/20'}"
+					role="button"
+					ondrop={onDrop}
+					ondragover={onDragOver}
+					ondragleave={onDragLeave}
+				>
+					<Card.Content class="flex flex-col items-center py-10">
+						<FileUp class="mb-4 h-12 w-12 text-muted-foreground" />
+						<p class="text-lg font-medium text-foreground">{t('import.drop_hint')}</p>
+						<p class="mt-1 text-sm text-muted-foreground">
+							{t('import.browse_hint')}
+						</p>
+						<div class="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+							<FileText class="h-3.5 w-3.5" />
+							{t('import.supported')}
+						</div>
+					</Card.Content>
+				</Card.Root>
+			</button>
+		</div>
 	{/if}
 
 	<!-- PHASE: PARSING — Progress -->
@@ -704,7 +703,7 @@
 			<Card.Content class="flex flex-col items-center py-12">
 				<Loader2 class="mb-4 h-12 w-12 animate-spin text-primary" />
 				<p class="text-lg font-medium text-foreground">
-					Parsing PDFs... {parseProgress.done}/{parseProgress.total}
+					{t('import.parsing', { done: parseProgress.done, total: parseProgress.total })}
 				</p>
 				<div class="mt-4 h-2 w-64 overflow-hidden rounded-full bg-muted">
 					<div
@@ -714,7 +713,7 @@
 				</div>
 				{#if parseErrors.length > 0}
 					<p class="mt-3 text-sm text-destructive">
-						{parseErrors.length} file(s) failed to parse
+						{t('import.parse_failed', { count: parseErrors.length })}
 					</p>
 				{/if}
 			</Card.Content>
@@ -728,23 +727,24 @@
 			<Card.Content class="flex items-center justify-between py-3">
 				<div class="flex items-center gap-4">
 					<span class="text-sm font-medium text-foreground">
-						Receipt {currentIndex + 1} of {queue.length}
+						{t('import.receipt_of', { current: currentIndex + 1, total: queue.length })}
 					</span>
 					<Separator.Root orientation="vertical" class="h-4" />
 					<div class="flex items-center gap-3 text-xs text-muted-foreground">
-						<span>{pendingCount} pending</span>
+						<span>{t('import.pending', { count: pendingCount })}</span>
 						{#if confirmedCount > 0}
-							<span class="text-green-400">✓ {confirmedCount} imported</span>
+							<span class="text-green-400">{t('import.imported', { count: confirmedCount })}</span>
 						{/if}
 						{#if skippedCount > 0}
-							<span>↷ {skippedCount} skipped</span>
+							<span>{t('import.skipped', { count: skippedCount })}</span>
 						{/if}
 						{#if errorCount > 0}
-							<span class="text-destructive">✗ {errorCount} failed</span>
+							<span class="text-destructive">{t('import.failed', { count: errorCount })}</span>
 						{/if}
 					</div>
 				</div>
 				<div class="flex items-center gap-2">
+					<Badge variant="outline" class="text-xs">{current.preview.template_name}</Badge>
 					<Badge variant="outline" class="text-xs">{current.filename}</Badge>
 				</div>
 			</Card.Content>
@@ -760,7 +760,7 @@
 					</div>
 					<div class="text-right">
 						<p class="text-2xl font-bold text-foreground">
-							€{getEffectiveTotalAmount(current).toFixed(2)}
+							{formatCurrency(getEffectiveTotalAmount(current))}
 						</p>
 						<p class="text-sm text-muted-foreground">
 							{formatReceiptDate(current)}
@@ -771,7 +771,8 @@
 			{#if currentShowsReviewPanel && currentRequiredValidation}
 				<Card.Content>
 					<div
-						class="flex items-center gap-2 rounded-lg border p-3 text-sm {currentReviewPanelState === 'error'
+						class="flex items-center gap-2 rounded-lg border p-3 text-sm {currentReviewPanelState ===
+						'error'
 							? 'border-destructive/50 bg-destructive/10 text-destructive'
 							: currentReviewPanelState === 'warning'
 								? 'border-amber-500/50 bg-amber-500/10 text-amber-400'
@@ -784,31 +785,36 @@
 						{/if}
 						<div>
 							{#if currentReviewPanelState === 'error'}
-								<p class="font-medium">Required fields are invalid.</p>
-								<p class="text-muted-foreground">Fix the required values before confirming.</p>
+								<p class="font-medium">{t('import.review_error')}</p>
+								<p class="text-muted-foreground">{t('import.review_error_desc')}</p>
 							{:else if currentReviewPanelState === 'warning'}
-								<p class="font-medium">Required fields are valid, but totals still mismatch.</p>
-								<p class="text-muted-foreground">Adjust values until the receipt and item totals align.</p>
+								<p class="font-medium">{t('import.review_warning')}</p>
+								<p class="text-muted-foreground">
+									{t('import.review_warning_desc')}
+								</p>
 							{:else}
-								<p class="font-medium">Review checks passed.</p>
+								<p class="font-medium">{t('import.review_success')}</p>
 								<p class="text-muted-foreground">
 									{currentHasRequiredFieldEdits
-										? 'Required fields were updated and are ready to confirm.'
-										: 'Required fields look good and this receipt is ready to confirm.'}
+										? t('import.review_success_edited')
+										: t('import.review_success_ok')}
 								</p>
 							{/if}
 						</div>
 					</div>
 					<div class="mt-4 grid gap-4 md:grid-cols-2">
 						<div>
-							<label class="mb-1 block text-sm font-medium text-foreground" for="required-total-amount">
-								Total amount (required)
+							<label
+								class="mb-1 block text-sm font-medium text-foreground"
+								for="required-total-amount"
+							>
+								{t('import.total_amount_label')}
 							</label>
 							<input
 								id="required-total-amount"
 								type="text"
 								bind:value={current.editableTotalAmount}
-								class="w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors {currentRequiredValidation.amountError
+								class="w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground transition-colors outline-none {currentRequiredValidation.amountError
 									? 'border-destructive focus-visible:ring-1 focus-visible:ring-destructive'
 									: 'border-input focus-visible:ring-1 focus-visible:ring-ring'}"
 								placeholder="e.g. 12.34"
@@ -819,14 +825,17 @@
 						</div>
 
 						<div>
-							<label class="mb-1 block text-sm font-medium text-foreground" for="required-purchased-at">
-								Purchase date/time (required)
+							<label
+								class="mb-1 block text-sm font-medium text-foreground"
+								for="required-purchased-at"
+							>
+								{t('import.purchase_date_label')}
 							</label>
 							<input
 								id="required-purchased-at"
 								type="datetime-local"
 								bind:value={current.editablePurchasedAt}
-								class="w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors {currentRequiredValidation.purchasedAtError
+								class="w-full rounded-md border bg-background px-3 py-2 text-sm text-foreground transition-colors outline-none {currentRequiredValidation.purchasedAtError
 									? 'border-destructive focus-visible:ring-1 focus-visible:ring-destructive'
 									: 'border-input focus-visible:ring-1 focus-visible:ring-ring'}"
 							/>
@@ -839,22 +848,31 @@
 					</div>
 
 					{#if hasTotalMismatch(current)}
-						<div class="mt-4 flex items-center gap-2 rounded-lg border p-3 text-sm {currentReviewPanelState === 'error'
-							? 'border-destructive/50 bg-destructive/10 text-destructive'
-							: 'border-amber-500/50 bg-amber-500/10 text-amber-400'}">
+						<div
+							class="mt-4 flex items-center gap-2 rounded-lg border p-3 text-sm {currentReviewPanelState ===
+							'error'
+								? 'border-destructive/50 bg-destructive/10 text-destructive'
+								: 'border-amber-500/50 bg-amber-500/10 text-amber-400'}"
+						>
 							<CircleDollarSign class="h-4 w-4 shrink-0" />
 							<p>
-								Item total is €{current.preview.computed_total.toFixed(2)} but effective receipt total is
-								€{getEffectiveTotalAmount(current).toFixed(2)}.
+								{t('import.total_mismatch', {
+									computed: formatCurrency(current.preview.computed_total),
+									effective: formatCurrency(getEffectiveTotalAmount(current))
+								})}
 							</p>
 						</div>
 					{/if}
 
 					{#if !currentRequiredValidation.amountError && !currentRequiredValidation.purchasedAtError}
-						<p class="mt-3 text-xs {currentReviewPanelState === 'success' ? 'text-green-400' : 'text-muted-foreground'}">
+						<p
+							class="mt-3 text-xs {currentReviewPanelState === 'success'
+								? 'text-green-400'
+								: 'text-muted-foreground'}"
+						>
 							{currentReviewPanelState === 'success' && currentHasRequiredFieldEdits
-								? 'Updates are applied and ready for confirmation.'
-								: 'Required fields are valid. You can still adjust them if needed.'}
+								? t('import.review_ready_note')
+								: t('import.review_valid_note')}
 						</p>
 					{/if}
 				</Card.Content>
@@ -865,7 +883,7 @@
 						class="flex items-center gap-2 rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-3 text-sm text-yellow-400"
 					>
 						<AlertTriangle class="h-4 w-4 shrink-0" />
-						This receipt may already be imported (duplicate TSE transaction)
+						{t('import.duplicate_warning')}
 					</div>
 				</Card.Content>
 			{/if}
@@ -874,38 +892,39 @@
 		<!-- Items table -->
 		<Card.Root>
 			<Card.Header>
-				<Card.Title>Items ({current.items.length})</Card.Title>
-				<Card.Description>Review and adjust categories before confirming</Card.Description>
+				<Card.Title>{t('import.items_count', { count: current.items.length })}</Card.Title>
+				<Card.Description>{t('import.items_desc')}</Card.Description>
 			</Card.Header>
 			<Card.Content>
 				<div class="overflow-x-auto">
 					<table class="w-full text-sm">
 						<thead>
 							<tr class="border-b border-border text-left text-muted-foreground">
-								<th class="pb-3 font-medium">Product</th>
-								<th class="pb-3 text-center font-medium">Qty</th>
-								<th class="pb-3 text-right font-medium">Unit</th>
-								<th class="pb-3 text-right font-medium">Total</th>
-								<th class="pb-3 font-medium">VAT</th>
-								<th class="pb-3 font-medium">Category</th>
+								<th class="pb-3 font-medium">{t('import.th_product')}</th>
+								<th class="pb-3 text-center font-medium">{t('import.th_qty')}</th>
+								<th class="pb-3 text-right font-medium">{t('import.th_unit')}</th>
+								<th class="pb-3 text-right font-medium">{t('import.th_total')}</th>
+								<th class="pb-3 font-medium">{t('import.th_vat')}</th>
+								<th class="pb-3 font-medium">{t('import.th_category')}</th>
 							</tr>
 						</thead>
 						<tbody>
-						{#each current.items as item, i (i)}
-							{@const ruleStatus = getCurrentItemRuleStatus(i)}
-							{@const ruleDraft = getCurrentItemRuleDraft(i)}
-							{@const ruleCreationAllowed = isCreateRuleAllowedForItem(i)}
-						{@const previewItem = current.preview.items[i]}
-						{@const previewCategoryId = previewItem?.category_id ?? null}
-						{@const isPreviewUncategorized = previewItem?.method === 'none' || previewCategoryId === null}
-						{@const isPreviewAutoCategorized = !isPreviewUncategorized}
-						{@const helperPanelState =
-							ruleStatus.state === 'created' || ruleStatus.state === 'exists'
-								? 'saved'
-								: isPreviewUncategorized
-									? 'uncategorized'
-									: 'auto'}
-						<tr class="border-b border-border/50 transition-colors hover:bg-accent/20">
+							{#each current.items as item, i (i)}
+								{@const ruleStatus = getCurrentItemRuleStatus(i)}
+								{@const ruleDraft = getCurrentItemRuleDraft(i)}
+								{@const ruleCreationAllowed = isCreateRuleAllowedForItem(i)}
+								{@const previewItem = current.preview.items[i]}
+								{@const previewCategoryId = previewItem?.category_id ?? null}
+								{@const isPreviewUncategorized =
+									previewItem?.method === 'none' || previewCategoryId === null}
+								{@const isPreviewAutoCategorized = !isPreviewUncategorized}
+								{@const helperPanelState =
+									ruleStatus.state === 'created' || ruleStatus.state === 'exists'
+										? 'saved'
+										: isPreviewUncategorized
+											? 'uncategorized'
+											: 'auto'}
+								<tr class="border-b border-border/50 transition-colors hover:bg-accent/20">
 									<td class="py-3 pr-4">
 										<div class="flex items-center gap-2">
 											<span class="text-foreground">{item.raw_name}</span>
@@ -916,121 +935,129 @@
 									</td>
 									<td class="py-3 text-center text-muted-foreground">{item.quantity}</td>
 									<td class="py-3 text-right text-muted-foreground">
-										€{item.unit_price.toFixed(2)}
+										{formatCurrency(item.unit_price)}
 									</td>
 									<td class="py-3 text-right font-medium text-foreground">
-										€{item.total_price.toFixed(2)}
+										{formatCurrency(item.total_price)}
 									</td>
 									<td class="py-3">
-										<Badge variant="secondary" class="text-xs">{formatVatClass(item.vat_class)}</Badge>
+										<Badge variant="secondary" class="text-xs"
+											>{formatVatClass(item.vat_class)}</Badge
+										>
 									</td>
 									<td class="py-3">
 										<select
 											class="rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground"
-											value={item.category_id ?? ''}
+											value={item.category_id ?? uncategorizedId}
 											onchange={(e) => {
 												const val = (e.target as HTMLSelectElement).value;
 												updateCategory(i, val ? Number(val) : null);
 											}}
 										>
-											<option value="">Uncategorized</option>
 											{#each categories as cat (cat.id)}
 												<option value={cat.id}>{cat.icon} {cat.name}</option>
-										{/each}
-									</select>
-									<div
-										class="mt-2 rounded-md border border-dashed p-2.5 {helperPanelState === 'saved'
-											? 'border-sky-400/45 bg-sky-500/10'
-											: helperPanelState === 'uncategorized'
-												? 'border-amber-400/45 bg-amber-500/10'
-												: 'border-emerald-400/40 bg-emerald-500/10'}"
-									>
-										<p
-											class="mb-2 text-xs leading-snug {helperPanelState === 'saved'
-												? 'text-sky-200/90'
+											{/each}
+										</select>
+										<div
+											class="mt-2 rounded-md border border-dashed p-2.5 {helperPanelState ===
+											'saved'
+												? 'border-sky-400/45 bg-sky-500/10'
 												: helperPanelState === 'uncategorized'
-													? 'text-amber-200/90'
-													: 'text-emerald-200/90'}"
+													? 'border-amber-400/45 bg-amber-500/10'
+													: 'border-emerald-400/40 bg-emerald-500/10'}"
 										>
-											{#if helperPanelState === 'saved'}
-												Rule saved for future imports.
-											{:else if isPreviewUncategorized}
-												No rule matched yet - create one if this name should map consistently.
-											{:else if previewItem?.matched_rule_keyword && previewItem?.matched_rule_match_type}
-												Auto-categorized by existing rule: {previewItem.matched_rule_keyword}
-												({previewItem.matched_rule_match_type})
-											{:else}
-												Already auto-categorized. Change keyword, match type, priority, or category to create a new rule.
-											{/if}
-										</p>
-										<div class="space-y-1.5">
-											<input
-												type="text"
-												class="w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground"
-												placeholder="Rule keyword"
-												value={ruleDraft.keyword}
-												oninput={(e) =>
-													updateCurrentItemRuleDraft(i, {
-														keyword: (e.target as HTMLInputElement).value
+											<p
+												class="mb-2 text-xs leading-snug {helperPanelState === 'saved'
+													? 'text-sky-200/90'
+													: helperPanelState === 'uncategorized'
+														? 'text-amber-200/90'
+														: 'text-emerald-200/90'}"
+											>
+												{#if helperPanelState === 'saved'}
+													{t('import.rule_saved_future')}
+												{:else if isPreviewUncategorized}
+													{t('import.no_rule_matched')}
+												{:else if previewItem?.matched_rule_keyword && previewItem?.matched_rule_match_type}
+													{t('import.auto_categorized_by', {
+														keyword: previewItem.matched_rule_keyword,
+														matchType: t(`import.${previewItem.matched_rule_match_type}`)
 													})}
-											/>
-											<div class="grid grid-cols-2 gap-1.5">
-												<select
-													class="w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground"
-													value={ruleDraft.matchType}
-													onchange={(e) =>
-														updateCurrentItemRuleDraft(i, {
-															matchType: (e.target as HTMLSelectElement).value as RuleMatchType
-														})}
-												>
-													<option value="contains">Contains</option>
-													<option value="exact">Exact</option>
-												</select>
+												{:else}
+													{t('import.auto_change_hint')}
+												{/if}
+											</p>
+											<div class="space-y-1.5">
 												<input
-													type="number"
-													min="0"
-													max="100"
-													step="1"
+													type="text"
 													class="w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground"
-													placeholder="Priority"
-													value={ruleDraft.priority}
+													placeholder={t('import.rule_keyword')}
+													value={ruleDraft.keyword}
 													oninput={(e) =>
 														updateCurrentItemRuleDraft(i, {
-															priority: clampPriority((e.target as HTMLInputElement).valueAsNumber)
+															keyword: (e.target as HTMLInputElement).value
 														})}
 												/>
+												<div class="grid grid-cols-2 gap-1.5">
+													<select
+														class="w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground"
+														value={ruleDraft.matchType}
+														onchange={(e) =>
+															updateCurrentItemRuleDraft(i, {
+																matchType: (e.target as HTMLSelectElement).value as RuleMatchType
+															})}
+													>
+														<option value="contains">{t('import.contains')}</option>
+														<option value="exact">{t('import.exact')}</option>
+													</select>
+													<input
+														type="number"
+														min="0"
+														max="100"
+														step="1"
+														class="w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground"
+														placeholder={t('import.priority')}
+														value={ruleDraft.priority}
+														oninput={(e) =>
+															updateCurrentItemRuleDraft(i, {
+																priority: clampPriority(
+																	(e.target as HTMLInputElement).valueAsNumber
+																)
+															})}
+													/>
+												</div>
+											</div>
+											<div class="mt-2 flex flex-col items-start gap-1">
+												<button
+													type="button"
+													class="text-xs text-primary underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground"
+													onclick={() => handleCreateRuleForItem(i)}
+													disabled={ruleStatus.state === 'saving' ||
+														item.category_id === null ||
+														!ruleCreationAllowed}
+												>
+													{ruleStatus.state === 'saving'
+														? t('import.saving')
+														: t('import.create_rule')}
+												</button>
+												{#if isPreviewAutoCategorized && !ruleCreationAllowed}
+													<p class="text-xs text-muted-foreground">
+														{t('import.change_to_create')}
+													</p>
+												{/if}
+												{#if ruleStatus.state === 'created'}
+													<p class="text-xs text-green-500">{t('import.rule_saved')}</p>
+												{:else if ruleStatus.state === 'exists'}
+													<p class="text-xs text-muted-foreground">{t('import.rule_exists')}</p>
+												{:else if ruleStatus.state === 'error'}
+													<p class="text-xs text-destructive">
+														{ruleStatus.message || t('import.err_rule_save_failed')}
+													</p>
+												{/if}
 											</div>
 										</div>
-										<div class="mt-2 flex flex-col items-start gap-1">
-											<button
-												type="button"
-												class="text-xs text-primary underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground"
-												onclick={() => handleCreateRuleForItem(i)}
-												disabled={
-													ruleStatus.state === 'saving' ||
-													item.category_id === null ||
-													!ruleCreationAllowed
-												}
-											>
-												{ruleStatus.state === 'saving' ? 'Saving...' : 'Create rule'}
-											</button>
-											{#if isPreviewAutoCategorized && !ruleCreationAllowed}
-												<p class="text-xs text-muted-foreground">
-													Change keyword, match type, priority, or category to create a new rule.
-												</p>
-											{/if}
-											{#if ruleStatus.state === 'created'}
-												<p class="text-xs text-green-500">Rule saved</p>
-											{:else if ruleStatus.state === 'exists'}
-												<p class="text-xs text-muted-foreground">Rule already exists</p>
-											{:else if ruleStatus.state === 'error'}
-												<p class="text-xs text-destructive">{ruleStatus.message || 'Failed to save rule.'}</p>
-											{/if}
-										</div>
-									</div>
-								</td>
-							</tr>
-						{/each}
+									</td>
+								</tr>
+							{/each}
 						</tbody>
 					</table>
 				</div>
@@ -1040,18 +1067,22 @@
 		<!-- Bonus card -->
 		{#if current.preview.bonus_entries.length > 0}
 			<Card.Root>
+				{@const previewProgramSavings = computeProgramSavings(current.preview.bonus_entries, current.preview.total_bonus)}
 				<Card.Header>
 					<div class="flex items-center gap-2">
 						<Sparkles class="h-4 w-4 text-yellow-400" />
-						<Card.Title>Bonus & Rewards</Card.Title>
+						<Card.Title>{t('import.bonus_title')}</Card.Title>
 					</div>
 					<Card.Description
-						>€{current.preview.total_bonus.toFixed(2)} total savings</Card.Description
+						>{t('import.total_savings', {
+							amount: formatCurrency(previewProgramSavings)
+						})}</Card.Description
 					>
 				</Card.Header>
 				<Card.Content>
 					<div class="space-y-3">
-						{#each current.preview.bonus_entries as bonus (bonus.description)}
+						{#each current.preview.bonus_entries as bonus, i (`${i}-${bonus.type}-${bonus.description}-${bonus.amount}`)}
+							{@const isDeduction = isDeductionBonusType(bonus.type)}
 							<div class="flex items-center justify-between">
 								<div class="flex items-center gap-3">
 									{#if bonus.type === 'action'}
@@ -1061,19 +1092,21 @@
 									{/if}
 									<div>
 										<p class="text-sm font-medium text-foreground">{bonus.description}</p>
-										<Badge variant="secondary" class="text-xs">{bonus.type}</Badge>
+										<Badge variant="secondary" class="text-xs">{bonusTypeLabel(bonus.type, t)}</Badge>
 									</div>
 								</div>
-								<p class="font-medium text-emerald-400">€{bonus.amount.toFixed(2)}</p>
+								<p class="font-medium {isDeduction ? 'text-destructive' : 'text-emerald-400'}">
+									{isDeduction ? '-' : '+'}{formatCurrency(Math.abs(bonus.amount))}
+								</p>
 							</div>
 						{/each}
 
 						{#if current.preview.bonus_balance !== null}
 							<Separator.Root />
 							<div class="flex items-center justify-between text-sm">
-								<span class="text-muted-foreground">Current Bonus Balance</span>
+								<span class="text-muted-foreground">{t('import.bonus_balance')}</span>
 								<span class="font-medium text-foreground">
-									€{current.preview.bonus_balance.toFixed(2)}
+									{formatCurrency(current.preview.bonus_balance)}
 								</span>
 							</div>
 						{/if}
@@ -1092,29 +1125,29 @@
 					class="text-destructive hover:text-destructive"
 				>
 					<XCircle class="mr-2 h-4 w-4" />
-					Cancel All
+					{t('import.cancel_all')}
 				</Button>
 				<Button variant="outline" onclick={handleSkip} disabled={confirming}>
 					<SkipForward class="mr-2 h-4 w-4" />
-					Skip
+					{t('import.skip')}
 				</Button>
 			</div>
 			<div class="flex items-center gap-2">
 				{#if pendingCount > 1}
 					<Button variant="outline" onclick={handleConfirmAll} disabled={confirming}>
 						<CheckCheck class="mr-2 h-4 w-4" />
-						Confirm All ({pendingCount})
+						{t('import.confirm_all', { count: pendingCount })}
 					</Button>
 				{/if}
 				<Button onclick={handleConfirm} disabled={confirming}>
-				{#if confirming}
-					<Loader2 class="mr-2 h-4 w-4 animate-spin" />
-					Saving...
-				{:else}
-					<CheckCircle2 class="mr-2 h-4 w-4" />
-					Confirm Import ({current.items.length} items)
-				{/if}
-			</Button>
+					{#if confirming}
+						<Loader2 class="mr-2 h-4 w-4 animate-spin" />
+						{t('import.saving')}
+					{:else}
+						<CheckCircle2 class="mr-2 h-4 w-4" />
+						{t('import.confirm', { count: current.items.length })}
+					{/if}
+				</Button>
 			</div>
 		</div>
 	{/if}
@@ -1123,28 +1156,28 @@
 	{#if phase === 'done'}
 		<Card.Root>
 			<Card.Header>
-				<Card.Title>Import Complete</Card.Title>
+				<Card.Title>{t('import.complete')}</Card.Title>
 			</Card.Header>
 			<Card.Content>
 				<div class="space-y-3">
 					<div class="grid grid-cols-3 gap-4 text-center">
 						<div class="rounded-lg bg-green-500/10 p-4">
 							<p class="text-2xl font-bold text-green-400">{confirmedCount}</p>
-							<p class="text-sm text-muted-foreground">Imported</p>
+							<p class="text-sm text-muted-foreground">{t('import.summary_imported')}</p>
 						</div>
 						<div class="rounded-lg bg-muted p-4">
 							<p class="text-2xl font-bold text-foreground">{skippedCount}</p>
-							<p class="text-sm text-muted-foreground">Skipped</p>
+							<p class="text-sm text-muted-foreground">{t('import.summary_skipped')}</p>
 						</div>
 						<div class="rounded-lg bg-destructive/10 p-4">
 							<p class="text-2xl font-bold text-destructive">{errorCount + parseErrors.length}</p>
-							<p class="text-sm text-muted-foreground">Failed</p>
+							<p class="text-sm text-muted-foreground">{t('import.summary_failed')}</p>
 						</div>
 					</div>
 
 					{#if parseErrors.length > 0}
 						<div class="rounded-lg border border-destructive/30 p-3">
-							<p class="mb-2 text-sm font-medium text-destructive">Parse failures:</p>
+							<p class="mb-2 text-sm font-medium text-destructive">{t('import.parse_failures')}</p>
 							{#each parseErrors as err, i (i)}
 								<p class="text-xs text-muted-foreground">{err}</p>
 							{/each}
@@ -1153,7 +1186,7 @@
 
 					{#if queue.filter((e) => e.status === 'error').length > 0}
 						<div class="rounded-lg border border-destructive/30 p-3">
-							<p class="mb-2 text-sm font-medium text-destructive">Import failures:</p>
+							<p class="mb-2 text-sm font-medium text-destructive">{t('import.import_failures')}</p>
 							{#each queue.filter((e) => e.status === 'error') as entry, i (`${entry.filename}-${i}`)}
 								<p class="text-xs text-muted-foreground">
 									{entry.filename}: {entry.errorMsg}
@@ -1166,8 +1199,8 @@
 		</Card.Root>
 
 		<div class="flex items-center justify-between">
-			<Button variant="outline" href="/receipts">View Receipts</Button>
-			<Button onclick={resetAll}>Import More</Button>
+			<Button variant="outline" href="/receipts">{t('import.view_receipts')}</Button>
+			<Button onclick={resetAll}>{t('import.import_more')}</Button>
 		</div>
 	{/if}
 </div>

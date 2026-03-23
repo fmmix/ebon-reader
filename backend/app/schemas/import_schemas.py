@@ -39,6 +39,9 @@ class PreviewResponse(BaseModel):
     total_bonus: float
     bonus_balance: float | None
     computed_total: float
+    template_id: int | None = None
+    template_slug: str = ""
+    template_name: str = ""
 
 
 class DebugTextResponse(BaseModel):
@@ -85,6 +88,7 @@ class ConfirmRequest(BaseModel):
     bonus_entries: list[ConfirmBonus]
     total_bonus: float
     bonus_balance: float | None = None
+    template_id: int | None = None
 
 
 class ConfirmResponse(BaseModel):
