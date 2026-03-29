@@ -398,7 +398,13 @@ export const en: Record<string, string> = {
 	'settings.lidl_desc':
 		'Copy this script and paste it into the browser console (F12) on lidl.de while logged in. It downloads all receipts as a JSON file.',
 	'settings.lidl_copy': 'Copy Script',
+	'settings.lidl_copying': 'Copying...',
 	'settings.lidl_copied': 'Script copied to clipboard!',
+	'settings.lidl_clip_failed':
+		'Clipboard access failed. Copy the script manually from the textarea below or retry.',
+	'settings.lidl_fetch_failed': 'Failed to load Lidl import script',
+	'settings.lidl_retry_copy': 'Retry Copy',
+	'settings.lidl_text_label': 'Lidl import script',
 	'settings.lidl_step1': '1. Log into lidl.de',
 	'settings.lidl_step2': '2. Press F12 → open Console tab',
 	'settings.lidl_step3': '3. Paste the script and press Enter',

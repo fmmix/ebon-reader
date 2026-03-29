@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import traceback
 from datetime import datetime
+from importlib import resources
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
@@ -35,7 +36,16 @@ from fastapi.responses import PlainTextResponse
 
 router = APIRouter(prefix="/api/import", tags=["import"])
 
-SCRAPER_PATH = Path(__file__).resolve().parents[3] / "tools" / "lidl_scraper.js"
+
+def _read_lidl_scraper_asset() -> str:
+    """Read the bundled Lidl scraper asset from the app package."""
+    return (
+        resources.files("app.assets")
+        .joinpath("lidl_scraper.js")
+        .read_text(encoding="utf-8")
+    )
+
+
 SUPPORTED_PREVIEW_EXTENSIONS = {".pdf", ".json", ".txt"}
 
 
@@ -176,9 +186,13 @@ def _parse_required_purchase_datetime(value: str) -> datetime:
 @router.get("/lidl-scraper", response_class=PlainTextResponse)
 async def get_lidl_scraper():
     """Serve the LIDL scraper script for copy-to-clipboard."""
-    if not SCRAPER_PATH.exists():
-        raise HTTPException(status_code=404, detail="Scraper script not found")
-    return PlainTextResponse(SCRAPER_PATH.read_text(encoding="utf-8"))
+    try:
+        return PlainTextResponse(_read_lidl_scraper_asset())
+    except (FileNotFoundError, ModuleNotFoundError):
+        raise HTTPException(
+            status_code=404,
+            detail="Bundled Lidl scraper asset not found",
+        )
 
 
 @router.post("/debug-text", response_model=DebugTextResponse)

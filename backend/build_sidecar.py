@@ -65,6 +65,8 @@ def build_sidecar() -> int:
             "--noconfirm",
             "--onefile",
             "--noconsole",
+            "--collect-data",
+            "app.assets",
             "--name",
             PYINSTALLER_NAME,
             str(ENTRYPOINT),

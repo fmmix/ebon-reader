@@ -34,8 +34,11 @@
 	let debugErrorMessage = $state('');
 	const debugSuccessFadeMs = 3000;
 	let debugSuccessTimeout: ReturnType<typeof setTimeout> | null = null;
+	let isLidlCopying = $state(false);
 	let lidlCopied = $state(false);
 	let lidlCopiedTimeout: ReturnType<typeof setTimeout> | null = null;
+	let lidlScriptText = $state('');
+	let lidlErrorMessage = $state('');
 	let syntheticStore = $state('all');
 	let syntheticCountPerStore = $state(5);
 	let isGeneratingSynthetic = $state(false);
@@ -57,6 +60,18 @@
 			debugSuccessMessage = '';
 			debugSuccessTimeout = null;
 		}, debugSuccessFadeMs);
+	}
+
+	function scheduleLidlCopiedFade(): void {
+		if (lidlCopiedTimeout) {
+			clearTimeout(lidlCopiedTimeout);
+		}
+
+		lidlCopied = true;
+		lidlCopiedTimeout = setTimeout(() => {
+			lidlCopied = false;
+			lidlCopiedTimeout = null;
+		}, 3000);
 	}
 
 	onDestroy(() => {
@@ -157,6 +172,56 @@
 
 		debugSuccessMessage = '';
 		debugErrorMessage = t('settings.debug_clip_failed');
+	}
+
+	async function handleLidlCopy() {
+		if (isLidlCopying) {
+			return;
+		}
+
+		isLidlCopying = true;
+		lidlCopied = false;
+		lidlErrorMessage = '';
+
+		try {
+			const script = await fetchLidlScraperScript();
+			lidlScriptText = script;
+			const copied = await copyDebugTextToClipboard(script);
+
+			if (copied) {
+				lidlErrorMessage = '';
+				lidlScriptText = '';
+				scheduleLidlCopiedFade();
+				return;
+			}
+
+			lidlErrorMessage = t('settings.lidl_clip_failed');
+		} catch (e: any) {
+			lidlErrorMessage = e?.message || t('settings.lidl_fetch_failed');
+		} finally {
+			isLidlCopying = false;
+		}
+	}
+
+	async function handleLidlRetryCopy() {
+		if (!lidlScriptText || isLidlCopying) {
+			return;
+		}
+
+		isLidlCopying = true;
+		lidlCopied = false;
+
+		const copied = await copyDebugTextToClipboard(lidlScriptText);
+		if (copied) {
+			lidlErrorMessage = '';
+			lidlScriptText = '';
+			scheduleLidlCopiedFade();
+			isLidlCopying = false;
+			return;
+		}
+
+		lidlErrorMessage = t('settings.lidl_clip_failed');
+		isLidlCopying = false;
 	}
 
 	function formatSyntheticStoreLabel(storeSlug: string): string {
@@ -275,28 +340,43 @@
 				<p>{t('settings.lidl_step4')}</p>
 			</div>
 			<div class="flex items-center gap-3">
-				<Button
-					onclick={async () => {
-						try {
-							const script = await fetchLidlScraperScript();
-							await navigator.clipboard.writeText(script);
-							lidlCopied = true;
-							if (lidlCopiedTimeout) clearTimeout(lidlCopiedTimeout);
-							lidlCopiedTimeout = setTimeout(() => {
-								lidlCopied = false;
-							}, 3000);
-						} catch {
-							/* ignore */
-						}
-					}}
-				>
+				<Button onclick={handleLidlCopy} disabled={isLidlCopying}>
 					<Copy class="mr-2 h-4 w-4" />
-					{t('settings.lidl_copy')}
+					{isLidlCopying ? t('settings.lidl_copying') : t('settings.lidl_copy')}
 				</Button>
 				{#if lidlCopied}
 					<span class="text-sm text-emerald-600">{t('settings.lidl_copied')}</span>
 				{/if}
 			</div>
+
+			{#if lidlErrorMessage}
+				<div
+					class="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+				>
+					{lidlErrorMessage}
+				</div>
+			{/if}
+
+			{#if lidlScriptText}
+				<div class="space-y-2">
+					<div class="flex flex-wrap gap-3">
+						<Button onclick={handleLidlRetryCopy} variant="outline" disabled={isLidlCopying}>
+							<Copy class="mr-2 h-4 w-4" />
+							{t('settings.lidl_retry_copy')}
+						</Button>
+					</div>
+					<label class="block text-sm text-muted-foreground" for="lidl-script-text"
+						>{t('settings.lidl_text_label')}</label
+					>
+					<textarea
+						id="lidl-script-text"
+						value={lidlScriptText}
+						rows="12"
+						readonly
+						class="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm text-foreground"
+					></textarea>
+				</div>
+			{/if}
 		</Card.Content>
 	</Card.Root>
 

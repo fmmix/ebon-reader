@@ -412,7 +412,13 @@ export const de: Record<string, string> = {
 	'settings.lidl_desc':
 		'Skript kopieren und in der Browser-Konsole (F12) auf lidl.de einfügen, während du eingeloggt bist. Es lädt alle Kassenbons als JSON herunter.',
 	'settings.lidl_copy': 'Skript kopieren',
+	'settings.lidl_copying': 'Wird kopiert...',
 	'settings.lidl_copied': 'Skript in die Zwischenablage kopiert!',
+	'settings.lidl_clip_failed':
+		'Zwischenablage-Zugriff fehlgeschlagen. Bitte kopiere das Skript manuell aus dem Textfeld unten oder versuche es erneut.',
+	'settings.lidl_fetch_failed': 'Lidl-Import-Skript konnte nicht geladen werden',
+	'settings.lidl_retry_copy': 'Erneut kopieren',
+	'settings.lidl_text_label': 'Lidl-Import-Skript',
 	'settings.lidl_step1': '1. Auf lidl.de einloggen',
 	'settings.lidl_step2': '2. F12 drücken → Konsole öffnen',
 	'settings.lidl_step3': '3. Script einfügen und Enter drücken',
